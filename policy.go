@@ -7,40 +7,39 @@ import (
 	"github.com/arandu-io/framework/security"
 )
 
-// The actions of Affiliate. Constants rather than strings at the call site: a
-// typo in an action name would silently authorize nothing, or worse, everything.
-//
-// They carry the entity in the name because an application registers many
-// packages, and the name of an action shows up in logs and in audit trails
-// where "view" on its own says nothing about what was viewed.
+// The actions of the affiliate program. Constants rather than strings at the
+// call site: a typo in an action name would silently authorize nothing, or
+// worse, everything.
 const (
-	// AffiliateView is reading one record.
-	AffiliateView security.Action = "affiliate.view"
-	// AffiliateList is paging through the records.
-	AffiliateList security.Action = "affiliate.list"
-	// AffiliateCreate is adding one.
-	AffiliateCreate security.Action = "affiliate.create"
-	// AffiliateUpdate is changing one.
-	AffiliateUpdate security.Action = "affiliate.update"
-	// AffiliateDelete is removing one.
-	AffiliateDelete security.Action = "affiliate.delete"
+	// DashboardView is an affiliate reading their own panel: the link, the
+	// plan, the numbers, the commissions, the balance and the withdrawals --
+	// and asking for a withdrawal or declaring a payout account of their own.
+	DashboardView security.Action = "affiliate.dashboard.view"
+	// PlansManage is defining the commission plans.
+	PlansManage security.Action = "affiliate.plans.manage"
+	// AffiliatesManage is the admin's side of the program: the affiliates, the
+	// tree, blocking, the commissions and their reversal, the write-off of a
+	// negative balance, the queue of withdrawals, and recording the payments
+	// the commissions are paid on.
+	AffiliatesManage security.Action = "affiliate.affiliates.manage"
+	// ReferralRecord is recording what a visitor did with a referral link: the
+	// click on /r/{code}, and the referral of the user who signed up with it.
+	// The visitor has no session; the application's sign-up is the caller.
+	ReferralRecord security.Action = "affiliate.referrals.record"
 )
 
-// AffiliatePolicy is the only authority over who does what with a Affiliate.
+// AdminRole is the role that runs the program in its tenant. The application
+// gives it through arandu-permission, which fills the Subject's roles.
+const AdminRole = "affiliate.admin"
+
+// AffiliatePolicy is the only authority over who does what in the program.
 //
-// IT DENIES EVERYTHING, and that is the state to start from rather than a
-// placeholder to delete. A policy shipped with a branch that allows every
-// action is a hole in every application that installs the package, and the hole
-// looks like working code until somebody reads it.
-//
-// There is deliberately no such branch to remove. Open one action at a time,
-// inside the custom block below, saying who may take it and on which record --
-// what is not written there stays closed, including every action added later.
+// It denies unless a rule below allows. The admin role manages the program in
+// its own tenant; an affiliate reads only their own row; a visitor -- with or
+// without a session -- may record a click and a referral and nothing else.
 type AffiliatePolicy struct{}
 
-// Compile-time proof that the policy answers about this entity and no other. A
-// policy that drifted onto another type would leave this one unguarded while
-// the Model path still compiled.
+// Compile-time proof that the policy answers about this entity and no other.
 var _ security.Policy[Affiliate] = AffiliatePolicy{}
 
 // Can decides whether the subject may perform the action on the record.
@@ -48,35 +47,45 @@ var _ security.Policy[Affiliate] = AffiliatePolicy{}
 // It is the only place that decides. The service reaches the Model only after
 // Authorize turns this method's nil result into a Grant.
 func (AffiliatePolicy) Can(ctx context.Context, s security.Subject, a security.Action, record Affiliate) error {
-	// Tenant isolation comes first and applies to every action. Without it every
-	// check below would be pointless in a multi-tenant system: a rule that
-	// allows an owner to read their own record would allow it across customers
-	// as soon as two of them have a record with the same identifier.
+	// Tenant isolation comes first and applies to every action.
 	//
-	// The empty id is the candidate that has not been stored yet, which belongs
-	// to nobody until it is written with the tenant off the Grant.
+	// The empty id is the candidate that has not been stored yet, or the probe
+	// a listing asks before it reads, which belongs to nobody.
 	if record.ID != "" && record.TenantID != s.Tenant {
 		return fmt.Errorf("affiliate belongs to another tenant")
 	}
 
 	// arandu:begin custom
-	// The rules of this package go here, one action at a time. A rule that
-	// depends on the record and not only on the role is written the same way:
-	//
-	//	if a == AffiliateView && (s.ID == record.ID || s.HasRole("admin")) {
-	//		return nil
-	//	}
-	//
-	// The routes of this package sit behind RequireAuth, so none of them asks
-	// about a guest. An application that calls the service from a public route
-	// of its own may, with security.Guest: a reader it declared anonymous on
-	// purpose, and the only subject that arrives without an id. Answer it
-	// explicitly or it falls through to the refusal below, which is the safe
-	// direction:
-	//
-	//	if a == AffiliateView && s.IsGuest() && record.Published {
-	//		return nil
-	//	}
+
+	// A referral link is opened by anybody, and a sign-up is somebody who has
+	// no session yet: recording either is allowed to every subject of the
+	// tenant, guests included, and to nothing else.
+	if a == ReferralRecord {
+		return nil
+	}
+
+	if s.IsGuest() {
+		return fmt.Errorf("a guest is no affiliate")
+	}
+
+	if s.HasRole(AdminRole) {
+		switch a {
+		case PlansManage, AffiliatesManage, DashboardView:
+			return nil
+		}
+	}
+
+	// An affiliate reads their own panel. The probe -- no record yet -- is
+	// answered yes, and the service asks again about the row it loaded.
+	if a == DashboardView {
+		if record.ID == "" {
+			return nil
+		}
+		if record.UserID != "" && record.UserID == s.ID {
+			return nil
+		}
+	}
+
 	// arandu:end custom
 
 	return fmt.Errorf("no rule allows %s on affiliate", a)

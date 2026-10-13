@@ -135,15 +135,15 @@ Opening an action means writing the rule that opens it, in the package's
 
 ```go
 	// arandu:begin custom
-	if a == AffiliateView && (s.ID == record.ID || s.HasRole("admin")) {
+	if a == DashboardView && (s.ID == record.ID || s.HasRole("admin")) {
 		return nil
 	}
 	// arandu:end custom
 ```
 
 What is not written there stays closed, including every action added later.
-There are five actions — `AffiliateView`, `AffiliateList`, `AffiliateCreate`,
-`AffiliateUpdate`, `AffiliateDelete` — and opening one opens exactly one.
+There are four actions — `DashboardView`, `PlansManage`, `AffiliatesManage`,
+`ReferralRecord` — and opening one opens exactly one.
 
 **Do not open it from the application.** There is no hook, no override and no
 config flag for the policy, and adding one would be a second place where

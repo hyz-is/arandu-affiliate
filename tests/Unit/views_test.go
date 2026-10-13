@@ -44,7 +44,8 @@ func module(t *testing.T) *affiliate.Module {
 	t.Helper()
 
 	sessions := security.NewSessionStore([]byte(sessionKey), time.Hour, false, security.NewMemoryBackend())
-	m, err := affiliate.New(affiliate.Config{}, data.Wrap(nil, data.DialectSQLite), sessions)
+	handle := data.Wrap(nil, data.DialectSQLite)
+	m, err := affiliate.New(affiliate.Config{Tenant: "acme", Wallet: testWallet(t, handle)}, handle, sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
 	}

@@ -45,7 +45,7 @@ also takes `g`.
 
 ```go
 	// arandu:begin custom
-	if a == AffiliateView && (s.ID == record.ID || s.HasRole("admin")) {
+	if a == DashboardView && (s.ID == record.ID || s.HasRole("admin")) {
 		return nil
 	}
 	// arandu:end custom
@@ -151,9 +151,9 @@ customers with a technical name.
 people delete:
 
 ```go
-	g, err := security.Authorize(ctx, s.policy, actor, AffiliateView, Affiliate{})
+	g, err := security.Authorize(ctx, s.policy, actor, DashboardView, Affiliate{})
 	record, err := Affiliates(s.db).WhereKey(id).First(ctx, g)
-	_, err = security.Authorize(ctx, s.policy, actor, AffiliateView, *record)
+	_, err = security.Authorize(ctx, s.policy, actor, DashboardView, *record)
 ```
 
 The first call sees an empty value, so every rule about the record itself —

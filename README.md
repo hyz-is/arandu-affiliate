@@ -4,22 +4,58 @@
 
 # Arandu Affiliate
 
-An Arandu package. It registers its own routes, owns its own table, and decides
-for itself who may reach either.
+An affiliate program for an Arandu application: a referral link per
+affiliate, a referral tree that is for life, commission plans of one to four
+levels, commissions paid into an [arandu-wallet](https://github.com/hyz-is/arandu-wallet)
+wallet the moment a referred user pays, and withdrawals an operator pays by
+PIX with the receipt attached.
+
+## How it works
+
+1. **The link.** Every affiliate has a code, and `/r/{code}` records the
+   click, sets a cookie that carries the code for the plan's cookie days (30 by
+   default), and lands the visitor — on `?to=` when it is a path of the same
+   site. A link opened later replaces the cookie.
+2. **The sign-up.** The application's sign-up reads the cookie
+   (`module.CodeFrom(r)`) and calls `Attribute`. The user is then linked to that
+   affiliate **for life**: no later cookie moves them. An affiliate cannot refer
+   themselves, and one person — by user or by CPF/CNPJ — cannot appear twice in a
+   tree.
+3. **The payment.** The application reports every payment of a user —
+   the first purchase and every renewal — with `RecordConversion`. The package
+   walks up the tree from the buyer and pays each level the rate of the plan in
+   force: level one is the buyer's referrer, level two the referrer's referrer,
+   up to four. A blocked affiliate's level is skipped; the levels above still
+   earn. The commission is deposited at once — no waiting period — and stays in
+   the wallet until withdrawn.
+4. **The refund.** `RecordRefund` reverses every commission of the payment.
+   The money leaves the wallet even past zero: a commission already withdrawn
+   leaves the balance negative, which closes withdrawals until later
+   commissions cover it, or the admin forgives the rest with a recorded
+   write-off.
+5. **The withdrawal.** The affiliate declares a payout account — PIX, bank,
+   crypto or another kind — always in the name and document of their
+   registration, and asks for any amount between the plan's minimum and
+   maximum (R$ 100,00 minimum by default), at most once a day. arandu-wallet
+   holds the amount; the operator takes the request, pays it outside the
+   system and attaches the end-to-end identifier and the receipt, or rejects it
+   with a reason, which frees the day.
+
+Money is `int64` centavos and rates are basis points (150 = 1,5%).
 
 ## Install
 
+It needs arandu-wallet v0.13.0 or newer, whose wallets take withdrawal
+requests only through the package that manages them:
+
 ```bash
+go get github.com/hyz-is/arandu-wallet@v0.13.0
 go get github.com/hyz-is/arandu-affiliate
 ```
 
 ## Wire it
 
-An Arandu application registers a module explicitly. There is no service
-provider, no container and no discovery, so these are the lines to paste into
-`bootstrap/app.go` and there are no others.
-
-The import, with the other module imports:
+An Arandu application registers a module explicitly, in `bootstrap/app.go`.
 
 ```go
 import (
@@ -27,207 +63,164 @@ import (
 )
 ```
 
-The construction, in `Build`, after the session store exists and before
-`k.Register`:
+In `Build`, after the session store and the wallet module exist:
 
 ```go
-	affiliateModule, err := affiliate.New(affiliate.Config{}, db, sessions)
+	affiliateModule, err := affiliate.New(affiliate.Config{
+		Tenant:       "acme",                   // the customer a visitor with no session is read as
+		Wallet:       walletModule.Service(),   // the one arandu-wallet instance
+		SecureCookie: cfg.App.Env == "production",
+	}, db, sessions)
 	if err != nil {
 		return App{}, err
 	}
 ```
 
-And the registration, inside the `k.Register(...)` call already there:
-
-```go
-		affiliateModule,
-```
-
-Then, once, before the application serves:
+and `affiliateModule,` inside `k.Register(...)`. Then, once:
 
 ```bash
 aru migrate
 ```
 
-This package owns a table, which is why the migration step is not optional and
-why `arandu.mod.toml` says `migrations = true`.
+The package owns eight tables; `arandu.mod.toml` says `migrations = true`.
+
+### In the sign-up
+
+```go
+	referral, err := affiliateModule.Service().Attribute(ctx, security.Guest(tenant), affiliate.AttributeRequest{
+		UserID:   newUser.ID,
+		Code:     affiliateModule.CodeFrom(r),
+		Document: newUser.Document, // optional; guards the tree by CPF/CNPJ too
+	})
+```
+
+A refusal is a `validation.Errors` the sign-up may ignore: the user is created
+either way, without a referrer.
+
+### Where payments are confirmed
+
+```go
+	_, _, err := affiliateModule.Service().RecordConversion(ctx, operator, affiliate.ConversionRequest{
+		OrderRef: "mp:" + payment.ID, BuyerUserID: payment.UserID, ProductID: "placaflow",
+		Amount: 19900, Renewal: payment.IsRenewal, OccurredAt: payment.ApprovedAt,
+	})
+	// and when it is given back:
+	_, err = affiliateModule.Service().RecordRefund(ctx, operator, "mp:"+payment.ID, "chargeback")
+```
+
+Both are idempotent by the order reference. `operator` is a subject with the
+roles below.
+
+## Give people access
+
+Roles reach the policy through the Subject, which
+[arandu-permission](https://github.com/hyz-is/arandu-permission) fills:
+
+| role | what it opens |
+| --- | --- |
+| `affiliate.admin` | plans, affiliates, the tree, blocking, commissions and their reversal, write-offs, the withdrawal queue, recording payments |
+| `wallet.operator` | arandu-wallet's operator actions; whoever records payments or pays withdrawals needs it too |
+
+An affiliate needs no role: the user whose `user_id` is on an affiliate's
+registration reads that panel and nobody else's. A visitor may only record a
+click and a referral. The tenant of every statement is the Grant's.
+
+## Screens
+
+Six, in pt-BR and English, on Kyse components and `components.DataTable`: the
+affiliate's panel — link with a copy button, the plan in force, the period's
+clicks, sign-ups, sales and commissions, the balance, the withdrawal form, the
+payout account, the commissions filtered by level and status and paged on the
+server, the withdrawals with their receipts — and the admin's plans,
+affiliates (paged, searched, filtered on the server), one affiliate with the
+tree and the write-off, the commissions with manual reversal, and the
+withdrawal queue. Every `GET` answers the screen to a browser and JSON to a
+client that asks for it.
 
 ## Publish the views
 
-This package carries the markup of its own pages and hands it over instead of
-rendering it from the inside, because a page you cannot edit is a page that says
-the wrong thing in your product.
-
-Look at what would be written, then write it:
-
 ```bash
-aru vendor:publish --tag=view
 aru vendor:publish --tag=view --apply
-```
-
-Nothing is written without `--apply`. The preview lists every file as `create`,
-`update`, `unchanged` or `conflict`, and running the command a second time
-writes nothing. A file changed outside its `arandu:begin custom` markers is
-reported as a conflict and left alone; `--force` publishes over one, and even
-then what is inside the markers is carried forward.
-
-The files land under `resources/views/modules/affiliate/`, and from that point
-they are yours. Nothing of this package is compiled beside them, so no view name
-is registered twice and no rule has to decide which of two files won — the
-consequence being that a view of this package that changes later does not reach
-a project that already published it.
-
-Two steps are left to you, and they are left to you because a command that
-edited `bootstrap/app.go` behind your back is a command whose output nobody can
-explain. Compile what was written:
-
-```bash
 aru view:build
 ```
 
-and import the directory it wrote into, with the other imports:
+and import the two directories `aru view:build` writes:
 
 ```go
 	_ "your/module/path/storage/framework/views/modules/affiliate"
+	_ "your/module/path/storage/framework/views/modules/affiliate/admin"
 ```
 
-Without that import the views are not in the binary, and the module refuses to
-boot rather than answering the first request that reaches one of them with a
-500. The refusal names the view, the command and the import.
+The module refuses to boot until they are linked. The sentences come from
+`resources/lang/<locale>/affiliate.json`; the application's own catalogue,
+passed as `Config.Translator`, is asked first, key by key.
 
 ## Configuration
 
 | field | required | meaning |
 | --- | --- | --- |
-| `Prefix` | no | where the routes are mounted. Defaults to `/affiliate`. |
-| `PageSize` | no | how many records one page answers with. Defaults to 25, refused above 200. |
-
-The zero `Config{}` is a valid configuration. There is no tenant to set: every
-route needs a session, and the tenant of every statement is the one on the
-Grant of whoever is signed in.
-
-`New` returns an error rather than starting half-wired, so a setting that
-cannot work fails where it is written instead of on the first request that
-needed it.
+| `Tenant` | yes | the customer a visitor with no session is read as on `/r/{code}`. |
+| `Wallet` | yes | arandu-wallet's service. The package keeps no balance of its own. |
+| `Prefix` | no | where the panels are mounted. Defaults to `/affiliate`. |
+| `ReferralPath` | no | where the link answers. Defaults to `/r`. |
+| `LandingPath` | no | where the link lands without `?to=`. Defaults to `/`. |
+| `CookieName` | no | the referral cookie. Defaults to `affiliate_ref`. |
+| `SecureCookie` | no | marks the cookie Secure; on in production. |
+| `PageSize` | no | rows per page. Defaults to 25, refused above 200. |
+| `Location` | no | the timezone days are counted in. Defaults to `America/Sao_Paulo`. |
+| `Translator` | no | the application's catalogue, asked first. |
 
 ## Routes
 
-| method | path | name |
+`GET /r/{code}` is public. Every other route sits behind `RequireAuth`: a
+visitor with no session is sent to `/auth/login`, and a handler reads who is
+asking with `ctx.User()`.
+
+| method | path | what |
 | --- | --- | --- |
-| `GET` | `/affiliate` | `affiliate.index` |
-| `GET` | `/affiliate/{id}` | `affiliate.show` |
-| `POST` | `/affiliate` | `affiliate.store` |
-
-Every one of them sits behind `RequireAuth`: a visitor with no session is sent
-to `/auth/login`, and the handler of a request that has one reads who is asking
-with `ctx.User()`. Behind the guard, every route is refused until the policy is
-opened. That is the state the package ships in, and it is deliberate.
-
-A handler returns the error the service returned, and the router answers it: a
-policy refusal is 403, a record that is not there is 404, and a rejected input
-goes back where it came from with the messages in the flash. A request that asks
-for JSON gets the same statuses as `application/problem+json` documents, and a
-rejected input as a 422 with the messages keyed by field. No handler maps an
-error to a status itself.
-
-## Open the policy
-
-`policy.go` denies every action and has no branch that allows one. Open what
-this package needs, one action at a time, inside the custom block:
-
-```go
-	// arandu:begin custom
-	if a == AffiliateView && (s.ID == record.ID || s.HasRole("admin")) {
-		return nil
-	}
-	// arandu:end custom
-```
-
-What is not written there stays closed, including every action added later.
+| `GET` | `/r/{code}` | the referral link |
+| `GET` | `/affiliate/me` | the affiliate's panel |
+| `POST` | `/affiliate/me/payout-accounts` | declare a payout account |
+| `POST` | `/affiliate/me/withdrawals` | ask for a withdrawal |
+| `GET` | `/affiliate/withdrawals/{id}/receipt` | the receipt of a paid withdrawal |
+| `GET`, `POST` | `/affiliate/admin/plans` | the plans, define one |
+| `POST` | `/affiliate/admin/plans/{id}/activation` | make a plan the one in force |
+| `GET`, `POST` | `/affiliate/admin/affiliates` | the affiliates, register one |
+| `GET` | `/affiliate/admin/affiliates/{id}` | one affiliate, with the tree |
+| `POST`, `DELETE` | `/affiliate/admin/affiliates/{id}/block` | block, unblock |
+| `POST` | `/affiliate/admin/affiliates/{id}/write-off` | forgive a negative balance |
+| `GET` | `/affiliate/admin/commissions` | every commission |
+| `POST` | `/affiliate/admin/commissions/{id}/reversal` | reverse a commission |
+| `POST` | `/affiliate/admin/conversions` | record a payment |
+| `POST` | `/affiliate/admin/refunds` | record a refund |
+| `GET` | `/affiliate/admin/withdrawals` | the withdrawal queue |
+| `POST` | `/affiliate/admin/withdrawals/{id}/processing`, `/payment`, `/rejection` | take, pay (multipart, with the receipt), reject |
 
 ## The data path
 
-`Affiliate` embeds `model.Model`, and `affiliateTable`, beside it in `model.go`,
-declares its table once. `aru model:build` generates `AffiliateQuery.go` from
-it: `Affiliates(db)`, which starts a `*AffiliateQuery`, and `AffiliateCollection`.
-The file is committed and never edited by hand; regenerate it after changing
-the entity, and `aru model:build --check` fails when it is out of date.
+Each entity embeds `model.Model` and declares its table beside it.
+`aru model:build` generates the queries — `AffiliateQuery.go` with
+`Affiliates(db)`, and one per entity — committed and never edited by hand;
+`aru model:build --check` fails when one is out of date.
 
 `AffiliateService` owns `*data.DB` and follows
-`validate -> security.Authorize -> Grant -> Model terminal`; handlers never hold
-the database or start a query. Every query starts at `Affiliates(s.db)`: the
-constructor returns one mutable query, so a second chain begun from a value held
-in a variable would carry the clauses of the first.
-
-Create builds the row with `Affiliates(s.db).New()` and writes `TenantID` from
-`data.Tenant(g)`. Find authorizes before reading and again against the row it
-found. List authorizes before building its scoped, allowlisted query. The table
-keeps its default `tenant_id` scope on every terminal.
-
-Terminals return `*Affiliate` and `[]*Affiliate`. Keep those pointers: a copy of a
-row keeps the model of the original, and the model refuses to write through it
-with `model.ErrUnwired`. `Resource` and `Collection` are explicit response
-snapshots and do not expose tenant or Model internals.
-
-The rules of the entity itself — an invariant, a derived value, a transition
-such as `Rename` guarded by `CanRename` — go in the custom block of `model.go`,
-as pure methods: no database, no network, no clock read inside, no Grant. The
-service orchestrates: it validates, authorizes, calls those rules and saves
-with the Grant.
-
-There is no CRUD Repository. Add one only for a complex query, read model,
-report, export or raw SQL contract that the generated query cannot express.
-
-## Layout
-
-```
-module.go         registration, routes, handlers and migrations
-config.go         what the application passes in
-model.go          the entity, its table and its own rules, and what it may answer with
-AffiliateQuery.go  the query aru model:build generates from model.go
-policy.go         who may do what
-service.go        the use cases, and Model access after authorization
-views.go          the files the application takes ownership of
-```
-
-## What is already correct, and has to stay that way
-
-**The policy denies everything.** There is no permit-all branch to delete
-later. The Service calls `security.Authorize` before its first `Affiliates(db)`
-reach, and every Model terminal requires the Grant that call produced.
-
-**Authorization precedes the Model.** The package audit checks that order in
-every exported Service method. A Model terminal enforces tenant scope; the
-preceding Policy call decides whether the action itself is allowed.
-
-**The tenant comes from `data.Tenant(g)`.** Never from the path, the body, the
-query string or a header. The value on the Grant came from the session; a value
-that arrived with the request is a value the caller chose.
-
-**Who is asking comes from the guard.** `RequireAuth` loads the session once and
-puts the subject on the request; nothing in the module loads it again.
-
-**`arandu.mod.toml` declares what the package does** — network, filesystem,
-exec, migrations — and the suite compares the declaration against what the code
-*calls*, not against what it imports: `net/http` is imported by everything with
-a route and says nothing. A package that says it makes no outbound calls and
-then opens one fails its own tests, and that is the only place the comparison
-happens. `aru doctor` audits the application it is run inside and never loads a
-dependency, so nothing audits an installed package except the package itself.
+`validate -> security.Authorize -> Grant -> Model terminal` in every exported
+method, which the unit suite audits. Every query reads the tenant from the
+Grant through `data.Tenant(g)`.
 
 ## Tests
 
 ```bash
-go test -race ./...
+GOWORK=off go test ./... -race
 ```
 
-The denial suite constructs the Service with a nil database, so even building
-`Affiliates(nil)` would panic. The structural twin reads the allowed path and
-rejects any Service method that reaches the Model before `Authorize`, and any
-handler that loads the session or picks a status itself. The route tests drive
-the module with no session, with a signed-in subject and with a rejected input,
-on that same handle over no database.
+The unit suite audits the data path, holds the policy and the calculation,
+and builds every published view with the view compiler an application uses —
+then renders each screen with sample data. The feature suite runs the link,
+the lifelong referral, renewals, every level, refunds below zero, the
+write-off, one withdrawal a day under eight concurrent requests, the limits,
+and tenant isolation against SQLite with arandu-wallet beside it.
 
 ## Licence
 
-MIT. See [LICENSE.md](LICENSE.md). Copyright Paulo R. Lima.
+MIT. See [LICENSE.md](LICENSE.md).

@@ -1,9 +1,12 @@
 package feature_test
 
 import (
+	"bytes"
 	"context"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"sort"
 	"strings"
 	"testing"
@@ -54,7 +57,14 @@ func mount(t *testing.T, cfg affiliate.Config) mounted {
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
 	flash := security.NewFlash([]byte(appKey), false)
 
-	module, err := affiliate.New(cfg, data.Wrap(nil, data.DialectSQLite), sessions)
+	handle := data.Wrap(nil, data.DialectSQLite)
+	if cfg.Tenant == "" {
+		cfg.Tenant = "acme"
+	}
+	if cfg.Wallet == nil {
+		cfg.Wallet = testWallet(t, handle)
+	}
+	module, err := affiliate.New(cfg, handle, sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
 	}
@@ -95,9 +105,13 @@ func (m mounted) signIn(t *testing.T, subject security.Subject) []*http.Cookie {
 func (m mounted) answer(t *testing.T, method, target, body string, cookies ...*http.Cookie) (rec *httptest.ResponseRecorder) {
 	t.Helper()
 
+	contentType := "application/x-www-form-urlencoded"
+	if body == multipartReceipt {
+		body, contentType = receiptUpload()
+	}
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	if body != "" {
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Content-Type", contentType)
 	}
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)
@@ -112,17 +126,58 @@ func (m mounted) answer(t *testing.T, method, target, body string, cookies ...*h
 	return rec
 }
 
-// everyRoute is a request to each route the module registers, under the
-// default prefix. TestTheModuleRegistersItsRoutesUnderItsPrefix fails when a
-// route exists that this list does not reach.
+// everyRoute is a request to each route behind the sign-in guard, under the
+// default prefix. ownRow marks the routes whose policy answers the probe for
+// any signed-in subject -- an affiliate's own panel -- so the refusal comes on
+// the row, after a read the handle over no database cannot answer.
 var everyRoute = []struct {
 	method string
 	target string
 	body   string
+	ownRow bool
 }{
-	{http.MethodGet, affiliate.DefaultPrefix, ""},
-	{http.MethodGet, affiliate.DefaultPrefix + "/record-1", ""},
-	{http.MethodPost, affiliate.DefaultPrefix, "name=one"},
+	{http.MethodGet, affiliate.DefaultPrefix + "/me", "", true},
+	{http.MethodPost, affiliate.DefaultPrefix + "/me/payout-accounts", "kind=pix&pix_key_type=email&pix_key=ana%40example.com", true},
+	{http.MethodPost, affiliate.DefaultPrefix + "/me/withdrawals", "amount_brl=150&account_id=acc-1", true},
+	{http.MethodGet, affiliate.DefaultPrefix + "/withdrawals/record-1/receipt", "", true},
+	{http.MethodGet, affiliate.DefaultPrefix + "/admin/plans", "", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/plans", "name=Padr%C3%A3o&kind=linear&rates=1%2C5&activate=1", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/plans/record-1/activation", "", false},
+	{http.MethodGet, affiliate.DefaultPrefix + "/admin/affiliates", "", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/affiliates", "user_id=user-2&name=Ana&document=529.982.247-25", false},
+	{http.MethodGet, affiliate.DefaultPrefix + "/admin/affiliates/record-1", "", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/affiliates/record-1/block", "", false},
+	{http.MethodDelete, affiliate.DefaultPrefix + "/admin/affiliates/record-1/block", "", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/affiliates/record-1/write-off", "reason=acordo", false},
+	{http.MethodGet, affiliate.DefaultPrefix + "/admin/commissions", "", true},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/commissions/record-1/reversal", "reason=fraude", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/conversions", "order_ref=o-1&buyer_user_id=u-1&amount=19900", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/refunds", "order_ref=o-1", false},
+	{http.MethodGet, affiliate.DefaultPrefix + "/admin/withdrawals", "", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/withdrawals/record-1/processing", "", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/withdrawals/record-1/payment", multipartReceipt, false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/withdrawals/record-1/rejection", "reason=chave+errada", false},
+}
+
+// publicRoutes are the routes a visitor with no session reaches.
+var publicRoutes = []string{"GET " + affiliate.DefaultReferralPath + "/{code}"}
+
+// multipartReceipt stands in everyRoute for a valid payment form, which
+// answer builds as multipart with a receipt.
+const multipartReceipt = "<multipart receipt>"
+
+// receiptUpload is a payment every check passes, as a browser sends it.
+func receiptUpload() (string, string) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("end_to_end_id", "E00000000202610201200abcdef123456")
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", `form-data; name="receipt"; filename="comprovante.pdf"`)
+	header.Set("Content-Type", "application/pdf")
+	part, _ := w.CreatePart(header)
+	_, _ = part.Write([]byte("%PDF-1.4 receipt"))
+	_ = w.Close()
+	return body.String(), w.FormDataContentType()
 }
 
 func TestAVisitorWithNoSessionIsSentToSignIn(t *testing.T) {
@@ -154,6 +209,9 @@ func TestASignedInSubjectReachesThePolicyAndIsRefused(t *testing.T) {
 	// router turns that refusal into 403 -- before any statement, which the
 	// handle over no database would have panicked on.
 	for _, request := range everyRoute {
+		if request.ownRow {
+			continue
+		}
 		rec := m.answer(t, request.method, request.target, request.body, cookies...)
 		if rec.Code != http.StatusForbidden {
 			t.Errorf("%s %s answered %d for a signed-in administrator, want %d",
@@ -172,7 +230,7 @@ func TestARejectedInputGoesBackBeforeTheDatabase(t *testing.T) {
 	// comes from the request and not from the policy. The router answers it the
 	// way it answers every rejected form: back where it came from, with the
 	// messages in the flash -- and it still never reaches a statement.
-	rec := m.answer(t, http.MethodPost, affiliate.DefaultPrefix, "name=", cookies...)
+	rec := m.answer(t, http.MethodPost, affiliate.DefaultPrefix+"/admin/affiliates", "user_id=user-2&name=&document=1", cookies...)
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
 		t.Fatalf("an empty name answered %d to %q, want %d back to /", rec.Code, rec.Header().Get("Location"), http.StatusSeeOther)
 	}
@@ -212,7 +270,7 @@ func TestTheModuleRegistersItsRoutesUnderItsPrefix(t *testing.T) {
 
 	m := mount(t, affiliate.Config{Prefix: "/widgets"})
 
-	got := make([]string, 0, 3)
+	got := make([]string, 0, len(everyRoute)+len(publicRoutes))
 	for _, route := range m.router.Routes() {
 		if route.Module != "affiliate" {
 			t.Errorf("the route %s %s is not tagged with the module name: %q", route.Method, route.Pattern, route.Module)
@@ -221,8 +279,14 @@ func TestTheModuleRegistersItsRoutesUnderItsPrefix(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	want := []string{"GET /widgets", "GET /widgets/{id}", "POST /widgets"}
-	if len(got) != len(want) || len(got) != len(everyRoute) {
+	want := append([]string(nil), publicRoutes...)
+	for _, request := range everyRoute {
+		target := "/widgets" + strings.TrimPrefix(request.target, affiliate.DefaultPrefix)
+		target = strings.ReplaceAll(target, "/record-1", "/{id}")
+		want = append(want, request.method+" "+target)
+	}
+	sort.Strings(want)
+	if len(got) != len(want) || len(got) != len(everyRoute)+len(publicRoutes) {
 		t.Fatalf("registered %v, want %v, and everyRoute reaches %d of them", got, want, len(everyRoute))
 	}
 	for i := range want {
@@ -269,9 +333,9 @@ func TestNewRefusesAWiringThatCannotWork(t *testing.T) {
 
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
 	handle := data.Wrap(nil, data.DialectSQLite)
-	valid := affiliate.Config{}
+	valid := affiliate.Config{Tenant: "acme", Wallet: testWallet(t, handle)}
 
-	if _, err := affiliate.New(affiliate.Config{PageSize: -1}, handle, sessions); err == nil {
+	if _, err := affiliate.New(affiliate.Config{PageSize: -1, Tenant: "acme", Wallet: valid.Wallet}, handle, sessions); err == nil {
 		t.Error("a configuration with a negative page size was accepted")
 	}
 	if _, err := affiliate.New(valid, nil, sessions); err == nil {
@@ -292,7 +356,7 @@ func TestNewRefusesARoutePrefixThatCannotBeRegistered(t *testing.T) {
 	handle := data.Wrap(nil, data.DialectSQLite)
 
 	for _, prefix := range []string{"/widgets{", "/widgets/{id}"} {
-		if _, err := affiliate.New(affiliate.Config{Prefix: prefix}, handle, sessions); err == nil {
+		if _, err := affiliate.New(affiliate.Config{Prefix: prefix, Tenant: "acme", Wallet: testWallet(t, handle)}, handle, sessions); err == nil {
 			t.Errorf("New accepted route prefix %q, which would panic during route registration", prefix)
 		}
 	}
@@ -302,7 +366,8 @@ func TestTheModuleDeclaresItsSchema(t *testing.T) {
 	t.Parallel()
 
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
-	module, err := affiliate.New(affiliate.Config{}, data.Wrap(nil, data.DialectSQLite), sessions)
+	handle := data.Wrap(nil, data.DialectSQLite)
+	module, err := affiliate.New(affiliate.Config{Tenant: "acme", Wallet: testWallet(t, handle)}, handle, sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
 	}

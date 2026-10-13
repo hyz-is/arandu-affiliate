@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/arandu-io/framework/foundation"
+	"github.com/arandu-io/framework/view"
 )
 
 // The view sources this package hands to the project that installs it.
@@ -168,4 +169,150 @@ func viewName(path string) string {
 	name := strings.TrimPrefix(strings.TrimPrefix(path, viewRoot), "/")
 	name = strings.TrimSuffix(name, viewSuffix)
 	return strings.ReplaceAll(name, "/", ".")
+}
+
+// The screens this package renders, by the name their path gives them.
+const (
+	ViewDashboard        = "modules.affiliate.dashboard"
+	ViewAdminPlans       = "modules.affiliate.admin.plans"
+	ViewAdminAffiliates  = "modules.affiliate.admin.affiliates"
+	ViewAdminAffiliate   = "modules.affiliate.admin.affiliate"
+	ViewAdminCommissions = "modules.affiliate.admin.commissions"
+	ViewAdminWithdrawals = "modules.affiliate.admin.withdrawals"
+)
+
+// FormState is what a form field reads from the page it is drawn on: what was
+// typed before a refusal, and the message for each field.
+type FormState struct{ view.Page }
+
+// FieldError is the first message for one field, empty when it was accepted.
+func (f FormState) FieldError(name string) string { return f.Page.FieldError(name) }
+
+// Screen is what every page of this package carries: the application's
+// chrome, the sentences, and where the package is mounted.
+type Screen struct {
+	view.Page
+	Labels Labels
+	Prefix string
+}
+
+// Form is the form state of the page.
+func (s Screen) Form() FormState { return FormState{Page: s.Page} }
+
+// LevelRow is one level of a plan.
+type LevelRow struct {
+	Level int
+	Rate  string
+}
+
+// PlanRow is a plan as a screen shows it.
+type PlanRow struct {
+	ID, Name, Kind, KindKey, Min, Max, Created, ActivateURL string
+	CookieDays                                              int
+	Levels                                                  []LevelRow
+	Active                                                  bool
+}
+
+// CommissionRow is one commission as a screen shows it.
+type CommissionRow struct {
+	ID, Date, Rate, Amount, AmountSort, Status, StatusKey string
+	Order, Buyer, Product, Affiliate, AffiliateURL        string
+	Reason, ReverseURL                                    string
+	Level                                                 int
+	Reversible                                            bool
+}
+
+// AccountOption is one payout account a withdrawal can be paid into.
+type AccountOption struct{ ID, Label string }
+
+// WithdrawalRow is one withdrawal request as a screen shows it.
+type WithdrawalRow struct {
+	ID, Affiliate, AffiliateURL, Amount, Account, Status, StatusKey, RequestedAt, Reason string
+	Open, Processing, Paid                                                               bool
+	ProcessURL, PayURL, RejectURL, ReceiptURL                                            string
+}
+
+// TableState is a server-paged list: the filters in force and where the page
+// is.
+type TableState struct {
+	URL, Query, Sort, Dir     string
+	CurrentPage, Pages, Total int
+}
+
+// DashboardPageData is the affiliate's own panel.
+type DashboardPageData struct {
+	Screen
+	Name, Code, Link, Document string
+	Blocked                    bool
+	Plan                       *PlanRow
+	From, To                   string
+	Clicks, Signups, Sales     int64
+	Commissions                string
+	Balance, Held, Available   string
+	Negative                   bool
+	Min, Max                   string
+	Rows                       []CommissionRow
+	Level, Status              string
+	Table                      TableState
+	Accounts                   []AccountOption
+	Withdrawals                []WithdrawalRow
+	WithdrawURL, AccountURL    string
+}
+
+// AdminPlansPageData is the plans, for the admin.
+type AdminPlansPageData struct {
+	Screen
+	Plans    []PlanRow
+	StoreURL string
+}
+
+// AffiliateRow is one affiliate in the admin's list.
+type AffiliateRow struct {
+	ID, Name, Code, Document, User, Status, StatusKey, Created, URL string
+	Active                                                          bool
+}
+
+// AdminAffiliatesPageData is the admin's list of affiliates.
+type AdminAffiliatesPageData struct {
+	Screen
+	Rows     []AffiliateRow
+	Status   string
+	Table    TableState
+	StoreURL string
+}
+
+// TreeRow is one person in an affiliate's tree.
+type TreeRow struct {
+	Level                                 int
+	User, Name, Code, Status, Joined, URL string
+}
+
+// AdminAffiliatePageData is one affiliate, for the admin.
+type AdminAffiliatePageData struct {
+	Screen
+	Affiliate                             AffiliateRow
+	Link                                  string
+	Balance, Held, Available              string
+	Negative                              bool
+	Clicks, Signups, Sales                int64
+	Commissions                           string
+	Tree                                  []TreeRow
+	BlockURL, WriteOffURL, CommissionsURL string
+}
+
+// AdminCommissionsPageData is every commission, for the admin.
+type AdminCommissionsPageData struct {
+	Screen
+	Rows          []CommissionRow
+	Level, Status string
+	AffiliateID   string
+	Table         TableState
+}
+
+// AdminWithdrawalsPageData is the queue of affiliates' withdrawals.
+type AdminWithdrawalsPageData struct {
+	Screen
+	Rows   []WithdrawalRow
+	Status string
+	URL    string
 }

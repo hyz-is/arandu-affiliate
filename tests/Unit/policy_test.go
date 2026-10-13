@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
@@ -13,128 +14,178 @@ import (
 	"github.com/arandu-io/hesape/database/query"
 
 	affiliate "github.com/hyz-is/arandu-affiliate"
+	wallet "github.com/hyz-is/arandu-wallet"
 )
 
-// The four properties this package exists to keep are checked here, and they
-// are checked against the code rather than described in a document:
-//
-//  1. the policy denies every action, and has no branch that allows one;
-//  2. the service authorizes before constructing or running the generated query;
-//  3. the tenant comes from the Grant;
-//  4. nothing reaches the database without passing through the first two.
-//
-// The fourth is checked by the handle these tests pass in. It wraps a nil
-// *sql.DB, so any statement that were issued would panic and fail the test
-// loudly -- which makes "the refusal happened before the Model" a fact the
-// suite proves rather than a comment. The structural twin in audit_test.go
-// keeps that order visible on every service method, including an allowed path.
+// The properties this package exists to keep are checked here against the
+// code: the policy denies what no rule allows; the service authorizes before
+// it constructs or runs a generated query; the tenant comes from the Grant.
+// The nil handle below panics on any statement, so a refusal that comes after
+// the Model fails loudly instead of passing.
 
-// everyAction is the whole set the policy answers about. A test that listed
-// four of five would pass while the fifth was open.
+// everyAction is the whole set the policy answers about.
 var everyAction = []security.Action{
-	affiliate.AffiliateView,
-	affiliate.AffiliateList,
-	affiliate.AffiliateCreate,
-	affiliate.AffiliateUpdate,
-	affiliate.AffiliateDelete,
+	affiliate.DashboardView,
+	affiliate.PlansManage,
+	affiliate.AffiliatesManage,
+	affiliate.ReferralRecord,
 }
 
-// administrator is the most privileged subject an application can produce. It
-// is the one to test the default with: a policy that refuses an administrator
-// refuses everyone.
-func administrator() security.Subject {
+// manageActions are the ones only the admin takes.
+var manageActions = []security.Action{affiliate.PlansManage, affiliate.AffiliatesManage}
+
+// signedIn is a person with a session and no role this package knows.
+func signedIn() security.Subject {
 	return security.Subject{ID: "user-1", Tenant: "acme", Roles: []string{"admin"}, Verified: true}
 }
 
-func TestThePolicyDeniesEveryActionByDefault(t *testing.T) {
+// finance is the subject the application gave the package's admin role.
+func finance() security.Subject {
+	return security.Subject{ID: "user-9", Tenant: "acme", Roles: []string{affiliate.AdminRole}, Verified: true}
+}
+
+func row(id, tenant, user string) affiliate.Affiliate {
+	return affiliate.Affiliate{ID: id, TenantID: tenant, UserID: user, Name: "Ana", Code: "ana", Status: affiliate.AffiliateActive}
+}
+
+func TestThePolicyRefusesWhatNoRuleAllows(t *testing.T) {
+	t.Parallel()
+
+	// A role named "admin" is the application's, not this package's.
+	for _, action := range manageActions {
+		_, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, signedIn(), action, affiliate.Affiliate{})
+		if !errors.Is(err, security.ErrForbidden) {
+			t.Errorf("a subject without %s was allowed %s: %v", affiliate.AdminRole, action, err)
+		}
+	}
+	_, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, signedIn(), affiliate.DashboardView, row("a-2", "acme", "somebody-else"))
+	if !errors.Is(err, security.ErrForbidden) {
+		t.Errorf("a subject read somebody else's panel: %v", err)
+	}
+}
+
+func TestTheAffiliateReadsTheirOwnPanelAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	mine := row("a-1", "acme", "user-1")
+	if _, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, signedIn(), affiliate.DashboardView, mine); err != nil {
+		t.Errorf("the affiliate was refused their own panel: %v", err)
+	}
+	for _, action := range manageActions {
+		if _, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, signedIn(), action, mine); !errors.Is(err, security.ErrForbidden) {
+			t.Errorf("the affiliate was allowed %s on their own row: %v", action, err)
+		}
+	}
+}
+
+func TestTheAdminActsAcrossItsTenantAndNoFurther(t *testing.T) {
 	t.Parallel()
 
 	for _, action := range everyAction {
-		t.Run(string(action), func(t *testing.T) {
-			t.Parallel()
+		if _, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, finance(), action, row("a-1", "acme", "user-1")); err != nil {
+			t.Errorf("the admin was refused %s in its tenant: %v", action, err)
+		}
+		if _, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, finance(), action, row("a-1", "globex", "user-1")); !errors.Is(err, security.ErrForbidden) {
+			t.Errorf("the admin was allowed %s on another tenant's affiliate: %v", action, err)
+		}
+	}
+}
 
-			_, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{},
-				administrator(), action, affiliate.Affiliate{})
-			if !errors.Is(err, security.ErrForbidden) {
-				t.Fatalf("an unopened policy allowed %s: got %v, want ErrForbidden", action, err)
-			}
-		})
+func TestAVisitorRecordsAClickAndAReferralAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	guest := security.Guest("acme")
+	if _, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, guest, affiliate.ReferralRecord, row("a-1", "acme", "user-1")); err != nil {
+		t.Fatalf("a visitor was refused recording a click on a link of their tenant: %v", err)
+	}
+	if _, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, guest, affiliate.ReferralRecord, row("a-1", "globex", "user-1")); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("a visitor recorded a click on another tenant's link: %v", err)
+	}
+	for _, action := range []security.Action{affiliate.DashboardView, affiliate.PlansManage, affiliate.AffiliatesManage} {
+		if _, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, guest, action, affiliate.Affiliate{}); !errors.Is(err, security.ErrForbidden) {
+			t.Errorf("a visitor was allowed %s: %v", action, err)
+		}
 	}
 }
 
 func TestThePolicyDeniesARecordOfAnotherTenant(t *testing.T) {
 	t.Parallel()
 
-	other := affiliate.Affiliate{ID: "record-1", TenantID: "globex", Name: "theirs"}
-
-	err := affiliate.AffiliatePolicy{}.Can(context.Background(),
-		administrator(), affiliate.AffiliateView, other)
-	if err == nil {
-		t.Fatal("the policy allowed a record belonging to another tenant")
-	}
-	// The message is asserted because the tenant check is the one refusal that
-	// has to survive somebody opening the actions below it.
-	if !strings.Contains(err.Error(), "another tenant") {
-		t.Fatalf("the refusal did not name the tenant: %v", err)
-	}
-}
-
-func TestThePolicyDeniesAGuest(t *testing.T) {
-	t.Parallel()
-
-	for _, action := range everyAction {
-		_, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{},
-			security.Guest("acme"), action, affiliate.Affiliate{})
-		if !errors.Is(err, security.ErrForbidden) {
-			t.Fatalf("a guest was allowed %s: got %v, want ErrForbidden", action, err)
-		}
+	err := affiliate.AffiliatePolicy{}.Can(context.Background(), signedIn(), affiliate.DashboardView, row("a-1", "globex", "user-1"))
+	if err == nil || !strings.Contains(err.Error(), "another tenant") {
+		t.Fatalf("the refusal of another tenant's record is %v", err)
 	}
 }
 
 func TestAuthorizeRefusesASubjectThatIsNobody(t *testing.T) {
 	t.Parallel()
 
-	// The zero Subject is a session that failed to load, not an anonymous
-	// reader, and it is refused before the policy is consulted. A package that
-	// answered it as a guest would answer a broken session as a visitor.
-	_, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{},
-		security.Subject{}, affiliate.AffiliateView, affiliate.Affiliate{})
+	_, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, security.Subject{}, affiliate.DashboardView, affiliate.Affiliate{})
 	if !errors.Is(err, security.ErrForbidden) {
-		t.Fatalf("an empty subject was authorized: got %v, want ErrForbidden", err)
+		t.Fatalf("an empty subject was authorized: %v", err)
 	}
 }
 
-// nilHandle is a handle over no database.
-//
-// Any statement issued through it panics, which is what makes these tests
-// prove that the refusal came first: a service that reached the Model before
-// authorizing would crash here rather than pass.
+// nilHandle is a handle over no database: any statement panics.
 func nilHandle() *data.DB { return data.Wrap(nil, data.DialectSQLite) }
 
 func TestTheServiceRefusesBeforeReachingTheModel(t *testing.T) {
 	t.Parallel()
 
-	// A nil handle makes even construction of Affiliates panic, at the
-	// GetQueryGrammar the query asks the handle for. This catches moving the
-	// generated query constructor -- not only its terminal -- ahead of
-	// authorization.
 	service := affiliate.NewAffiliateService(nil)
 	ctx := context.Background()
+	guest := security.Guest("acme")
 
-	if _, err := service.Find(ctx, administrator(), "record-1"); !errors.Is(err, security.ErrForbidden) {
-		t.Fatalf("Find reached the Model before the policy refusal: %v", err)
+	checks := map[string]func() error{
+		"Find":         func() error { _, err := service.Find(ctx, signedIn(), "a-1"); return err },
+		"Mine":         func() error { _, err := service.Mine(ctx, guest); return err },
+		"Create":       func() error { _, err := service.Create(ctx, signedIn(), validAffiliate()); return err },
+		"SetBlocked":   func() error { _, err := service.SetBlocked(ctx, signedIn(), "a-1", true); return err },
+		"Plans":        func() error { _, err := service.Plans(ctx, signedIn()); return err },
+		"ActivatePlan": func() error { _, err := service.ActivatePlan(ctx, signedIn(), "p-1"); return err },
+		"ActivePlan":   func() error { _, err := service.ActivePlan(ctx, guest); return err },
+		"Tree":         func() error { _, err := service.Tree(ctx, signedIn(), "a-1"); return err },
+		"Withdrawals":  func() error { _, err := service.Withdrawals(ctx, signedIn(), ""); return err },
+		"WriteOff":     func() error { _, err := service.WriteOff(ctx, signedIn(), "a-1", "perdão"); return err },
+		"RecordRefund": func() error { _, err := service.RecordRefund(ctx, signedIn(), "o-1", ""); return err },
+		"BalanceOf":    func() error { _, err := service.BalanceOf(ctx, guest, "a-1"); return err },
+		"StatsOf":      func() error { _, err := service.StatsOf(ctx, guest, "a-1", "2026-10-01", "2026-10-31"); return err },
+		"AffiliatesPage": func() error {
+			_, _, err := service.AffiliatesPage(ctx, signedIn(), affiliate.AffiliatesQuery{})
+			return err
+		},
+		"CommissionsPage": func() error {
+			_, _, err := service.CommissionsPage(ctx, guest, affiliate.CommissionsQuery{})
+			return err
+		},
+		"RecordConversion": func() error {
+			_, _, err := service.RecordConversion(ctx, signedIn(), affiliate.ConversionRequest{
+				OrderRef: "o-1", BuyerUserID: "u-1", Amount: 100, OccurredAt: time.Now(),
+			})
+			return err
+		},
+		"CreatePlan": func() error {
+			_, err := service.CreatePlan(ctx, signedIn(), affiliate.PlanRequest{Name: "Plano", Kind: affiliate.Linear, Rates: []int64{150}}, true)
+			return err
+		},
+		"RequestWithdrawal": func() error {
+			_, err := service.RequestWithdrawal(ctx, guest, affiliate.WithdrawalRequest{AccountID: "acc-1"})
+			return err
+		},
 	}
-	if _, err := service.List(ctx, administrator(), data.Query{}); !errors.Is(err, security.ErrForbidden) {
-		t.Fatalf("List reached the Model before the policy refusal: %v", err)
-	}
-	if _, err := service.Create(ctx, administrator(), affiliate.CreateRequest{Name: "one"}); !errors.Is(err, security.ErrForbidden) {
-		t.Fatalf("Create reached the Model before the policy refusal: %v", err)
+	for name, check := range checks {
+		if err := check(); !errors.Is(err, security.ErrForbidden) {
+			t.Errorf("%s reached the Model before the policy refusal: %v", name, err)
+		}
 	}
 }
 
-// recordingHandle runs nothing and keeps every statement it is handed, so a
-// test reads what the table compiles instead of reading its settings. The table
-// keeps its settings to itself; what it writes is the behaviour they decide.
+// validAffiliate is a registration every check passes.
+func validAffiliate() affiliate.CreateRequest {
+	return affiliate.CreateRequest{UserID: "user-1", Name: "Ana", Document: "529.982.247-25"}
+}
+
+// recordingHandle runs nothing and keeps every statement it is handed.
 type recordingHandle struct {
 	*data.DB
 	statements []recordedStatement
@@ -145,8 +196,6 @@ type recordedStatement struct {
 	bindings []any
 }
 
-// newRecordingHandle borrows the grammar and the processor of an SQLite handle
-// over no database, and answers every statement itself.
 func newRecordingHandle() *recordingHandle { return &recordingHandle{DB: nilHandle()} }
 
 func (h *recordingHandle) record(sql string, bindings []any) {
@@ -178,7 +227,6 @@ func (h *recordingHandle) Statement(_ context.Context, sql string, bindings []an
 	return true, nil
 }
 
-// first is the first recorded statement that starts with verb.
 func (h *recordingHandle) first(t *testing.T, verb string) recordedStatement {
 	t.Helper()
 	for _, statement := range h.statements {
@@ -190,10 +238,8 @@ func (h *recordingHandle) first(t *testing.T, verb string) recordedStatement {
 	return recordedStatement{}
 }
 
-// TestAffiliatesReturnsAWiredTenantScopedQuery holds what affiliateTable declares,
-// through what it makes the generated query do: the table it reads, a key the
-// application writes and the engine never fills, and a tenant_id taken from the
-// Grant on the way in and on the way out.
+// TestAffiliatesReturnsAWiredTenantScopedQuery holds what affiliateTable
+// declares, through what it makes the generated query do.
 func TestAffiliatesReturnsAWiredTenantScopedQuery(t *testing.T) {
 	t.Parallel()
 
@@ -206,45 +252,27 @@ func TestAffiliatesReturnsAWiredTenantScopedQuery(t *testing.T) {
 	if key := table.MorphModel(handle); key.GetKeyName() != "id" || key.GetKeyType() != "string" {
 		t.Fatalf("Affiliates key is %q of type %q; want id, as text", key.GetKeyName(), key.GetKeyType())
 	}
-
-	row, err := affiliate.Affiliates(handle).New()
+	r, err := affiliate.Affiliates(handle).New()
 	if err != nil {
 		t.Fatalf("building a row: %v", err)
 	}
-	if row.Table() != table {
-		t.Fatal("Affiliates returned an entity whose embedded Model is not wired to its table")
-	}
-
-	// The key is application-generated text: the insert carries the one the row
-	// was given, and the engine is never asked for one. An incrementing key
-	// would go through the processor, which runs on no database here, and a key
-	// the model generated would replace the one the service wrote.
-	row.ID = "record-1"
-	if _, err := row.Save(ctx, security.SystemGrant(affiliate.AffiliateCreate, "acme")); err != nil {
+	r.ID = "record-1"
+	if _, err := r.Save(ctx, security.SystemGrant(affiliate.AffiliatesManage, "acme")); err != nil {
 		t.Fatalf("saving through the recording handle: %v", err)
 	}
 	insert := handle.first(t, "insert")
-	if !slices.Contains(insert.bindings, any("record-1")) || row.ID != "record-1" {
-		t.Fatalf("the insert %q %v does not write the application key, or the row lost it (%q)", insert.sql, insert.bindings, row.ID)
+	if !slices.Contains(insert.bindings, any("record-1")) || !strings.Contains(insert.sql, "tenant_id") || !slices.Contains(insert.bindings, any("acme")) {
+		t.Fatalf("the insert %q %v does not write the application key and the Grant's tenant", insert.sql, insert.bindings)
 	}
-	if !strings.Contains(insert.sql, "tenant_id") || !slices.Contains(insert.bindings, any("acme")) {
-		t.Fatalf("the insert %q %v does not stamp tenant_id with the Grant's tenant", insert.sql, insert.bindings)
-	}
-
-	// And the tenant column scopes a read by the Grant's tenant.
-	if _, err := affiliate.Affiliates(handle).WhereKey("record-1").First(ctx, security.SystemGrant(affiliate.AffiliateView, "acme")); err != nil {
+	if _, err := affiliate.Affiliates(handle).WhereKey("record-1").First(ctx, security.SystemGrant(affiliate.DashboardView, "acme")); err != nil {
 		t.Fatalf("reading through the recording handle: %v", err)
 	}
 	read := handle.first(t, "select")
 	if !strings.Contains(read.sql, "tenant_id") || !slices.Contains(read.bindings, any("acme")) {
-		t.Fatalf("the read %q %v is not filtered by tenant_id with the Grant's tenant", read.sql, read.bindings)
+		t.Fatalf("the read %q %v is not filtered by the Grant's tenant", read.sql, read.bindings)
 	}
 }
 
-// TestTheMissingRecordIsTheModelsNotFound holds the one link between this
-// package's sentinel and the router's answer. The router answers
-// model.ErrModelNotFound with 404 and has never heard of ErrNotFound, so the
-// sentinel is a 404 only while it wraps the model's.
 func TestTheMissingRecordIsTheModelsNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -256,62 +284,102 @@ func TestTheMissingRecordIsTheModelsNotFound(t *testing.T) {
 func TestASystemGrantWithoutATenantReachesNothing(t *testing.T) {
 	t.Parallel()
 
-	// A system grant with no tenant names no customer. The Model refuses it
-	// while preparing the query, before the nil handle can issue a statement.
-	_, err := affiliate.Affiliates(nilHandle()).WhereKey("record-1").First(
-		context.Background(), security.SystemGrant(affiliate.AffiliateView, ""))
+	_, err := affiliate.Affiliates(nilHandle()).WhereKey("record-1").First(context.Background(), security.SystemGrant(affiliate.DashboardView, ""))
 	if !errors.Is(err, model.ErrNoTenant) {
 		t.Fatalf("a system grant with no tenant returned %v, want ErrNoTenant", err)
 	}
 }
 
-func TestTheTenantComesFromTheGrant(t *testing.T) {
+func TestTheRequestsValidateTheirInput(t *testing.T) {
 	t.Parallel()
 
-	g := security.SystemGrant(affiliate.AffiliateView, "acme")
-	if got := data.Tenant(g); got != "acme" {
-		t.Fatalf("data.Tenant(g) = %q, want %q", got, "acme")
+	if errs := validAffiliate().Validate(); errs.Any() {
+		t.Fatalf("a valid affiliate was rejected: %v", errs)
+	}
+	for name, change := range map[string]func(*affiliate.CreateRequest){
+		"a CPF with a wrong check digit": func(r *affiliate.CreateRequest) { r.Document = "529.982.247-24" },
+		"no login user":                  func(r *affiliate.CreateRequest) { r.UserID = "" },
+		"a code with spaces":             func(r *affiliate.CreateRequest) { r.Code = "ana maria" },
+		"a code too short":               func(r *affiliate.CreateRequest) { r.Code = "an" },
+	} {
+		request := validAffiliate()
+		change(&request)
+		if errs := request.Validate(); !errs.Any() {
+			t.Errorf("%s validated", name)
+		}
+	}
+	company := validAffiliate()
+	company.Document = "11.222.333/0001-81"
+	if errs := company.Validate(); errs.Any() {
+		t.Errorf("an affiliate with a CNPJ was rejected: %v", errs)
 	}
 
-	// And a Grant nobody issued carries no tenant at all, so a statement that
-	// took its tenant from anywhere else would be reading rows this Grant does
-	// not name.
-	if got := data.Tenant(security.Grant{}); got != "" {
-		t.Fatalf("the zero Grant carries the tenant %q, want none", got)
+	plans := map[string]affiliate.PlanRequest{
+		"a linear plan with two levels": {Name: "P", Kind: affiliate.Linear, Rates: []int64{150, 50}},
+		"a multilevel plan with five":   {Name: "P", Kind: affiliate.Multilevel, Rates: []int64{1, 1, 1, 1, 1}},
+		"a rate of zero":                {Name: "P", Kind: affiliate.Linear, Rates: []int64{0}},
+		"levels paying more than 100%":  {Name: "P", Kind: affiliate.Multilevel, Rates: []int64{6000, 5000}},
+		"a maximum below the minimum":   {Name: "P", Kind: affiliate.Linear, Rates: []int64{150}, MinWithdrawal: 10000, MaxWithdrawal: 5000},
+		"a kind nobody declared":        {Name: "P", Kind: "pyramid", Rates: []int64{150}},
+	}
+	for name, plan := range plans {
+		if errs := plan.Validate(); !errs.Any() {
+			t.Errorf("%s validated", name)
+		}
+	}
+	if errs := (affiliate.PlanRequest{Name: "P", Kind: affiliate.Multilevel, Rates: []int64{500, 200, 100, 50}, MinWithdrawal: 10000}).Validate(); errs.Any() {
+		t.Errorf("a valid four-level plan was rejected: %v", errs)
 	}
 }
 
-func TestTheRequestValidatesItsInput(t *testing.T) {
+func TestACommissionIsTheRateOfThePaymentRoundedToTheCentavo(t *testing.T) {
 	t.Parallel()
 
-	if errs := (affiliate.CreateRequest{}).Validate(); !errs.Any() {
-		t.Fatal("an empty request validated")
+	cases := []struct{ amount, rate, want int64 }{
+		{19900, 150, 299}, // 1,5% of R$ 199,00 = 2,985 -> 2,99
+		{10000, 150, 150}, // 1,5% of R$ 100,00
+		{333, 1000, 33},   // 10% of R$ 3,33 = 0,333 -> 0,33
+		{335, 1000, 34},   // 0,335 -> 0,34
+		{1, 150, 0},       // a centavo pays nothing at 1,5%
+		{100000, 10000, 100000},
 	}
-	if errs := (affiliate.CreateRequest{Name: strings.Repeat("a", 121)}).Validate(); !errs.Any() {
-		t.Fatal("a name past the maximum validated")
-	}
-	if errs := (affiliate.CreateRequest{Name: "one"}).Validate(); errs.Any() {
-		t.Fatalf("a valid request was rejected: %v", errs)
+	for _, c := range cases {
+		if got := affiliate.CommissionOf(c.amount, c.rate); got != c.want {
+			t.Errorf("CommissionOf(%d, %d) = %d, want %d", c.amount, c.rate, got, c.want)
+		}
 	}
 }
 
 func TestTheConfigurationRefusesWhatCannotWork(t *testing.T) {
 	t.Parallel()
 
+	wallets := testWallet(t, nilHandle())
 	for name, cfg := range map[string]affiliate.Config{
-		"relative prefix":    {Prefix: "affiliate"},
-		"page size too big":  {PageSize: affiliate.MaxPageSize + 1},
-		"negative page size": {PageSize: -1},
+		"no arandu-wallet":               {Tenant: "acme"},
+		"no tenant for visitors":         {Wallet: wallets},
+		"a tenant that cannot be one":    {Tenant: "Acme Corp", Wallet: wallets},
+		"a relative prefix":              {Prefix: "affiliate", Tenant: "acme", Wallet: wallets},
+		"a landing on another site":      {LandingPath: "//evil.example", Tenant: "acme", Wallet: wallets},
+		"a page size too big":            {PageSize: affiliate.MaxPageSize + 1, Tenant: "acme", Wallet: wallets},
+		"a cookie name with a semicolon": {CookieName: "a;b", Tenant: "acme", Wallet: wallets},
 	} {
 		if err := cfg.Validate(); err == nil {
 			t.Errorf("the configuration with %s was accepted", name)
 		}
 	}
-
-	// The zero value is the configuration an application that changes nothing
-	// writes, and it has to be one New accepts: there is no tenant to name,
-	// because every tenant comes from the Grant.
-	if err := (affiliate.Config{}).Validate(); err != nil {
-		t.Fatalf("the zero configuration was refused: %v", err)
+	if err := (affiliate.Config{Tenant: "acme", Wallet: wallets}).Validate(); err != nil {
+		t.Fatalf("a configuration with the tenant and the wallet was refused: %v", err)
 	}
+}
+
+// testWallet is arandu-wallet over a handle, the one instance an application
+// passes in Config.Wallet.
+func testWallet(t testing.TB, db *data.DB) *wallet.WalletService {
+	t.Helper()
+	sessions := security.NewSessionStore([]byte("0123456789abcdef0123456789abcdef"), time.Hour, false, security.NewMemoryBackend())
+	module, err := wallet.New(wallet.Config{Tenant: "acme"}, db, sessions)
+	if err != nil {
+		t.Fatalf("building arandu-wallet: %v", err)
+	}
+	return module.Service()
 }
