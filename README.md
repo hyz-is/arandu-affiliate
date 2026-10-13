@@ -208,6 +208,19 @@ Each entity embeds `model.Model` and declares its table beside it.
 method, which the unit suite audits. Every query reads the tenant from the
 Grant through `data.Tenant(g)`.
 
+## Example
+
+```bash
+go run -tags example ./example
+```
+
+It opens SQLite in a temporary directory, migrates arandu-wallet and this
+package, and runs the program: a two-level plan, two affiliates in a tree, a
+visitor through `/r/{code}` and a sign-up that reads the cookie, a purchase
+and renewals paid up the tree, a withdrawal and the one-a-day refusal, a
+refund past the balance, and the write-off. It leaves nothing behind. The
+build tag is there so that installing this package never compiles it.
+
 ## Tests
 
 ```bash
