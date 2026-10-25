@@ -17,6 +17,7 @@ import (
 	"github.com/arandu-io/framework/http/middleware"
 	"github.com/arandu-io/framework/security"
 	"github.com/arandu-io/hesape/database/migrations"
+	hhttp "github.com/arandu-io/hesape/http"
 
 	affiliate "github.com/hyz-is/arandu-affiliate"
 )
@@ -55,6 +56,7 @@ func mount(t *testing.T, cfg affiliate.Config) mounted {
 	t.Helper()
 
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
+	resolveAccounts(sessions)
 	flash := security.NewFlash([]byte(appKey), false)
 
 	handle := data.Wrap(nil, data.DialectSQLite)
@@ -81,13 +83,27 @@ func administrator() security.Subject {
 	return security.Subject{ID: "user-1", Tenant: "acme", Roles: []string{"admin"}, Verified: true}
 }
 
+// resolveAccounts installs what an application's accounts answer on every
+// request: the session keeps who is signed in, and the roles are read afresh,
+// so the administrator's role reaches the handler the way it does in an
+// application and never from a copy frozen into the session.
+func resolveAccounts(sessions *security.SessionStore) {
+	sessions.ResolveSubjects(func(_ context.Context, who security.Subject) (security.Subject, error) {
+		if account := administrator(); who.ID == account.ID && who.Tenant == account.Tenant {
+			return account, nil
+		}
+		return security.Subject{}, hhttp.ErrSubjectGone
+	})
+}
+
 // signIn starts a session for the subject and returns the cookies a browser
-// would send back with the next request.
+// would send back with the next request. The session is started with the
+// account and its tenant; the rest is the resolver's.
 func (m mounted) signIn(t *testing.T, subject security.Subject) []*http.Cookie {
 	t.Helper()
 
 	rec := httptest.NewRecorder()
-	if _, err := m.sessions.Start(context.Background(), rec, subject); err != nil {
+	if _, err := m.sessions.Start(context.Background(), rec, security.Subject{ID: subject.ID, Tenant: subject.Tenant}); err != nil {
 		t.Fatalf("starting a session: %v", err)
 	}
 	cookies := rec.Result().Cookies()
