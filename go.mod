@@ -3,10 +3,10 @@ module github.com/hyz-is/arandu-affiliate
 go 1.26.10
 
 require (
-	github.com/arandu-io/framework v0.66.0
-	github.com/arandu-io/hesape v0.85.0
+	github.com/arandu-io/framework v0.69.0
+	github.com/arandu-io/hesape v0.107.0
 	github.com/arandu-io/hesape/database/connectors/sqlite v0.11.0
-	github.com/arandu-io/kyse v0.35.0
+	github.com/arandu-io/kyse v0.53.0
 	github.com/hyz-is/arandu-br v0.4.1
 	github.com/hyz-is/arandu-wallet v0.20.0
 )
