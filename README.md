@@ -57,26 +57,42 @@ go get github.com/hyz-is/arandu-affiliate
 
 An Arandu application registers a module explicitly, in `bootstrap/app.go`.
 
+The import, with the other module imports:
+
 ```go
 import (
 	affiliate "github.com/hyz-is/arandu-affiliate"
 )
 ```
 
-In `Build`, after the session store and the wallet module exist:
+The construction, in `App`, once `NewAppServiceProvider` has returned and the
+wallet module exists. `New` refuses a wiring that cannot work and `Configure`
+has no way to return that error, so the module is built where the error can
+leave; the database and the session store are the ones the framework built from
+the configuration:
 
 ```go
 	affiliateModule, err := affiliate.New(affiliate.Config{
 		Tenant:       "acme",                   // the customer a visitor with no session is read as
 		Wallet:       walletModule.Service(),   // the one arandu-wallet instance
 		SecureCookie: cfg.App.Env == "production",
-	}, db, sessions)
+	}, drivers.DB, drivers.Sessions)
 	if err != nil {
-		return App{}, err
+		_ = drivers.Close()
+		return nil, err
 	}
 ```
 
-and `affiliateModule,` inside `k.Register(...)`. Then, once:
+And the registration, in the `WithProviders(...)` chain the builder is made of:
+
+```go
+	return Configure(cfg, drivers, app).
+		WithProviders(affiliateModule).
+		WithVersion(version, commit).
+		Create()
+```
+
+Then, once:
 
 ```bash
 aru migrate

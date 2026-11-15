@@ -1,6 +1,6 @@
 ---
 name: affiliate-package
-description: Install, wire and use the Arandu Affiliate package (Go, Arandu) in an application. Use when the request is to "install Arandu Affiliate", "add affiliate to the app", "go get github.com/hyz-is/arandu-affiliate", "wire it into bootstrap/app.go", "register the module", "use the affiliate routes", "everything under /affiliate returns 403", "403 forbidden from affiliate", "it redirects to /auth/login", "the table does not exist", "no such table", "change where it is mounted", "let admins read it", or when a project's go.mod already requires github.com/hyz-is/arandu-affiliate. Covers the three lines of wiring and where each one goes, the Config fields, none of them required, the routes, their names and the session they need, why the policy refuses everything until somebody opens it, and the migration step that is not optional.
+description: Install, wire and use the Arandu Affiliate package (Go, Arandu) in an application. Use when the request is to "install Arandu Affiliate", "add affiliate to the app", "go get github.com/hyz-is/arandu-affiliate", "wire it into bootstrap/app.go", "register the module", "use the affiliate routes", "everything under /affiliate returns 403", "403 forbidden from affiliate", "it redirects to /auth/login", "the table does not exist", "no such table", "change where it is mounted", "let admins read it", or when a project's go.mod already requires github.com/hyz-is/arandu-affiliate. Covers the wiring and where each part goes, publishing and linking the views, the Config fields, none of them required, the routes, their names and the session they need, why the policy refuses everything until somebody opens it, and the migration step that is not optional.
 license: MIT
 metadata:
   audience: app
@@ -19,10 +19,10 @@ happen.
 go get github.com/hyz-is/arandu-affiliate
 ```
 
-## The three lines of wiring, and where each one goes
+## The wiring, and where each part goes
 
-All three are in `bootstrap/app.go`. Nothing else in the application changes,
-and `aru make:module` does not edit this file for you.
+All of it is in `bootstrap/app.go`. `aru make:module` does not edit this file for
+you, and the views the package carries have to be published and linked, below.
 
 The import, with the other module imports:
 
@@ -32,26 +32,57 @@ import (
 )
 ```
 
-The construction, in `Build`, after the session store exists and before
-`k.Register`:
+The construction, in `App`, once `NewAppServiceProvider` has returned. `New`
+refuses a wiring that cannot work and `Configure` has no way to return that
+error, so the module is built where the error can leave; the database and the
+session store are the ones the framework built from the configuration:
 
 ```go
-	affiliateModule, err := affiliate.New(affiliate.Config{}, db, sessions)
+	affiliateModule, err := affiliate.New(affiliate.Config{}, drivers.DB, drivers.Sessions)
 	if err != nil {
-		return App{}, err
+		_ = drivers.Close()
+		return nil, err
 	}
 ```
 
-And the registration, inside the `k.Register(...)` call already there:
+And the registration, in the `WithProviders(...)` chain the builder is made of:
 
 ```go
-		affiliateModule,
+	return Configure(cfg, drivers, app).
+		WithProviders(affiliateModule).
+		WithVersion(version, commit).
+		Create()
 ```
 
 `New` returns an error rather than starting half-wired. It refuses a
 configuration that cannot work, a nil database handle and a nil session store,
 so a wiring mistake costs one restart instead of arriving as a nil dereference
 on the first request that needed it.
+
+## Then publish and link the views
+
+The package carries the markup of its own pages and hands it over, and it
+refuses to boot until the project has linked it. Publish them, then compile them:
+
+```bash
+aru vendor:publish --tag=view
+aru vendor:publish --tag=view --apply
+aru view:build
+```
+
+The first line only previews; nothing is written without `--apply`. The files
+land under `resources/views/modules/affiliate/` and are the project's from
+then on. `aru view:build` compiles them, and the compiled packages are imported
+with the other blank imports of `bootstrap/app.go`:
+
+```go
+	_ "your/module/path/storage/framework/views/modules/affiliate"
+	_ "your/module/path/storage/framework/views/modules/affiliate/admin"
+```
+
+**Symptom to recognise:** the application stops at boot with an error naming the
+view, the command and the import. One of the steps is missing, and the import
+is the usual one.
 
 ## Then run the migrations
 
