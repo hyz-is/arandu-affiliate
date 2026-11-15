@@ -237,6 +237,12 @@ type WithdrawalRow struct {
 type TableState struct {
 	URL, Query, Sort, Dir     string
 	CurrentPage, Pages, Total int
+	// Rows is how many rows the page holds and PerPage how many it may hold.
+	Rows, PerPage int
+	// Facets are the values chosen for each filter of the list, by filter key.
+	Facets map[string][]string
+	// Hidden are the keys of the columns the reader switched off.
+	Hidden []string
 }
 
 // DashboardPageData is the affiliate's own panel.

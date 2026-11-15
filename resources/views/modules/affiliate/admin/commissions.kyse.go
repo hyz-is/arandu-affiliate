@@ -44,28 +44,20 @@ func commissionsTable(data CommissionsData) components.DataTableProps {
 			{HTML: action},
 		}})
 	}
-	var levels, statuses []string
-	if data.Level != "" {
-		levels = []string{data.Level}
-	}
-	if data.Status != "" {
-		statuses = []string{data.Status}
-	}
 	return components.DataTableProps{
 		ID: "affiliate-admin-commissions", Label: data.Labels.T("screen.admin_commissions_title"), URL: data.Table.URL,
+		State: data.Table.State(), Paginator: data.Table.Pager(), FullPager: true, HeaderMenu: true,
 		Caption: data.Labels.T("screen.admin_commissions_lead"), ColumnsLabel: data.Labels.T("control.columns"), Lines: data.TableLines(),
 		Filters: []components.DataTableFilter{
-			{Key: "level", Label: data.Labels.T("field.level"), Options: data.LevelOptions(), Selected: levels},
-			{Key: "status", Label: data.Labels.T("field.status"), Options: data.CommissionStatusOptions(), Selected: statuses},
+			{Key: "level", Label: data.Labels.T("field.level"), Options: data.LevelOptions()},
+			{Key: "status", Label: data.Labels.T("field.status"), Options: data.CommissionStatusOptions()},
 		},
-		SortKey: data.Table.Sort, SortDir: data.Table.Dir,
-		Page: data.Table.CurrentPage, Pages: data.Table.Pages, Total: data.Table.Total,
 		Columns: []components.TableColumn{
 			{Label: data.Labels.T("field.date"), Key: "created_at", Sortable: true},
 			{Label: data.Labels.T("noun.affiliate"), Key: "affiliate"},
 			{Label: data.Labels.T("field.level"), Key: "level", Sortable: true},
 			{Label: data.Labels.T("field.order"), Key: "order", Hideable: true},
-			{Label: data.Labels.T("field.buyer"), Key: "buyer", Hideable: true, Hidden: true},
+			{Label: data.Labels.T("field.buyer"), Key: "buyer", Hideable: true},
 			{Label: data.Labels.T("field.rate"), Key: "rate", Hideable: true},
 			{Label: data.Labels.T("field.amount"), Key: "amount", Sortable: true, Align: "right"},
 			{Label: data.Labels.T("field.status"), Key: "status", Sortable: true},

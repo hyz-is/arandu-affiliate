@@ -322,7 +322,8 @@ func (m *Module) dashboard(ctx *fhttp.Context) error {
 		Rows:  commissionRows(m.cfg.Prefix, sc.Labels, rows, m.cfg.Location),
 		Level: ctx.Query("level"), Status: ctx.Query("status"),
 		Table: TableState{URL: m.cfg.Prefix + "/me", Sort: q.Sort, Dir: q.Dir, CurrentPage: q.Page,
-			Pages: pages(total, m.cfg.PageSize), Total: total},
+			Pages: pages(total, m.cfg.PageSize), Total: total, Rows: len(rows), PerPage: m.cfg.PageSize,
+			Facets: chosen("level", ctx.Query("level"), "status", ctx.Query("status")), Hidden: hiddenColumns(ctx.Request.URL.Query())},
 		WithdrawURL: m.cfg.Prefix + "/me/withdrawals", AccountURL: m.cfg.Prefix + "/me/payout-accounts",
 	}
 	min, max, _ := m.svc.limits(plan)
@@ -497,7 +498,8 @@ func (m *Module) affiliates(ctx *fhttp.Context) error {
 	return ctx.View(ViewAdminAffiliates, AdminAffiliatesPageData{
 		Screen: sc, Rows: list, Status: ctx.Query("status"),
 		Table: TableState{URL: m.cfg.Prefix + adminSegment + "/affiliates", Query: q.Search, Sort: q.Sort, Dir: q.Dir,
-			CurrentPage: q.Page, Pages: pages(total, m.cfg.PageSize), Total: total},
+			CurrentPage: q.Page, Pages: pages(total, m.cfg.PageSize), Total: total, Rows: len(rows), PerPage: m.cfg.PageSize,
+			Facets: chosen("status", ctx.Query("status")), Hidden: hiddenColumns(ctx.Request.URL.Query())},
 		StoreURL: m.cfg.Prefix + adminSegment + "/affiliates",
 	})
 }
@@ -615,7 +617,8 @@ func (m *Module) commissions(ctx *fhttp.Context) error {
 		Screen: sc, Rows: commissionRows(m.cfg.Prefix, sc.Labels, rows, m.cfg.Location),
 		Level: ctx.Query("level"), Status: ctx.Query("status"), AffiliateID: q.AffiliateID,
 		Table: TableState{URL: m.cfg.Prefix + adminSegment + "/commissions", Sort: q.Sort, Dir: q.Dir,
-			CurrentPage: q.Page, Pages: pages(total, m.cfg.PageSize), Total: total},
+			CurrentPage: q.Page, Pages: pages(total, m.cfg.PageSize), Total: total, Rows: len(rows), PerPage: m.cfg.PageSize,
+			Facets: chosen("level", ctx.Query("level"), "status", ctx.Query("status")), Hidden: hiddenColumns(ctx.Request.URL.Query())},
 	})
 }
 

@@ -39,7 +39,7 @@ func plansTable(data PlansData) components.DataTableProps {
 	}
 	return components.DataTableProps{
 		ID: "affiliate-plans", Label: data.Labels.T("screen.admin_plans_title"), Caption: data.Labels.T("screen.admin_plans_lead"),
-		ColumnsLabel: data.Labels.T("control.columns"), Lines: data.TableLines(), Complete: true, PageSize: 25,
+		ColumnsLabel: data.Labels.T("control.columns"), Lines: data.TableLines(), Complete: true, PageSize: 25, HeaderMenu: true,
 		Columns: []components.TableColumn{
 			{Label: data.Labels.T("field.name"), Key: "name", Sortable: true},
 			{Label: data.Labels.T("field.kind"), Key: "kind"},

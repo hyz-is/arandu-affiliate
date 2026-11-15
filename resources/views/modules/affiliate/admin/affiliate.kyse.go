@@ -33,7 +33,7 @@ func treeTable(data AffiliateData) components.DataTableProps {
 	return components.DataTableProps{
 		ID: "affiliate-tree", Label: data.Labels.T("screen.tree_title"),
 		ColumnsLabel: data.Labels.T("control.columns"), Lines: data.TableLines(), Complete: true, PageSize: 25,
-		SearchName: "q", SearchPlaceholder: data.Labels.T("control.search"),
+		Searchable: true, SearchPlaceholder: data.Labels.T("control.search"), HeaderMenu: true,
 		Columns: []components.TableColumn{
 			{Label: data.Labels.T("field.level"), Key: "level", Sortable: true},
 			{Label: data.Labels.T("noun.affiliate"), Key: "name"},

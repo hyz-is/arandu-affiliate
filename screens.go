@@ -2,10 +2,12 @@ package affiliate
 
 import (
 	"html/template"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/arandu-io/hesape/pagination"
 	"github.com/arandu-io/kyse/components"
 	br "github.com/hyz-is/arandu-br"
 	wallet "github.com/hyz-is/arandu-wallet"
@@ -103,11 +105,65 @@ func dateTime(t time.Time, loc *time.Location) string {
 func (s Screen) TableLines() components.DataTableLines {
 	l := s.Labels
 	return components.DataTableLines{
-		Showing: l.T("table.showing"), PerPage: l.T("table.per_page"), NoResult: l.T("table.no_result"),
-		Previous: l.T("table.previous"), Next: l.T("table.next"), Page: l.T("table.page"), PageOf: l.T("table.page_of"),
-		Back: l.T("table.back"), Forward: l.T("table.forward"), SelectAll: l.T("table.select_all"), Bulk: l.T("table.bulk"),
-		Apply: l.T("table.apply"), Ascending: l.T("table.ascending"), Descending: l.T("table.descending"), Unsorted: l.T("table.unsorted"),
+		Filter: l.T("table.filter"), NoResult: l.T("table.no_result"),
+		Rows: l.T("table.rows"), RowsOne: l.T("table.rows_one"), RowsMany: l.T("table.rows_many"),
+		SelectedCount: l.T("table.selected_count"), RowsPerPage: l.T("table.rows_per_page"), PageOf: l.T("table.page_of"),
+		First: l.T("table.first"), Previous: l.T("table.previous"), Next: l.T("table.next"), Last: l.T("table.last"),
+		Back: l.T("table.back"), Forward: l.T("table.forward"),
+		SelectAll: l.T("table.select_all"), SelectRow: l.T("table.select_row"), Bulk: l.T("table.bulk"), Apply: l.T("table.apply"),
+		Ascending: l.T("table.ascending"), Descending: l.T("table.descending"), Unsorted: l.T("table.unsorted"),
+		Reset: l.T("table.reset"), ClearFilters: l.T("table.clear_filters"),
+		NoFacetResults: l.T("table.no_facet_results"), FacetSelected: l.T("table.facet_selected"),
+		OpenMenu: l.T("table.open_menu"), Actions: l.T("table.actions"), ToggleColumns: l.T("table.toggle_columns"),
+		Asc: l.T("table.asc"), Desc: l.T("table.desc"), Hide: l.T("table.hide"),
 	}
+}
+
+// State is the table's state as the data table draws its addresses from: every
+// control builds its address from it, so a step keeps the search, the filters,
+// the order and the columns switched off.
+func (t TableState) State() components.DataTableState {
+	return components.DataTableValues{
+		Q: t.Query, Sort: t.Sort, Dir: t.Dir, Facets: t.Facets,
+		CurrentPage: t.CurrentPage, Size: t.PerPage, DefaultSize: t.PerPage, Hide: t.Hidden,
+	}
+}
+
+// Pager is the page of the list the data table reads its position and its total
+// from.
+func (t TableState) Pager() components.Paginator {
+	return pagination.NewLengthAwarePage(t.Rows, t.Total, max(t.PerPage, 1), max(t.CurrentPage, 1), pagination.Options{Path: t.URL})
+}
+
+// chosen is the facets a request chose: each key with its value, and no key
+// whose value is empty.
+func chosen(pairs ...string) map[string][]string {
+	facets := map[string][]string{}
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if pairs[i+1] != "" {
+			facets[pairs[i]] = []string{pairs[i+1]}
+		}
+	}
+	return facets
+}
+
+// maxHiddenColumns bounds how many columns a request may switch off, so the
+// address a table writes back stays short.
+const maxHiddenColumns = 16
+
+// hiddenColumns are the keys of the columns a query switched off. The table
+// only hides a column that declared itself hideable, so a key it does not know
+// changes nothing; this keeps the list short and each key a short word.
+func hiddenColumns(query url.Values) []string {
+	var keys []string
+	for _, key := range query["hide"] {
+		key = strings.TrimSpace(key)
+		if key == "" || len(key) > 32 || len(keys) == maxHiddenColumns {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // AdminNav is the bar on top of every admin screen, the current list marked.

@@ -40,7 +40,7 @@ func withdrawalsTable(data WithdrawalsData) components.DataTableProps {
 			{Text: w.Account},
 			{HTML: status, SortValue: w.StatusKey},
 			{Text: w.Reason},
-		}})
+		}, Facets: map[string]string{"status": w.StatusKey}})
 	}
 	var selected []string
 	if data.Status != "" {
@@ -49,8 +49,9 @@ func withdrawalsTable(data WithdrawalsData) components.DataTableProps {
 	return components.DataTableProps{
 		ID: "affiliate-withdrawals", Label: data.Labels.T("screen.admin_withdrawals_title"), URL: data.URL,
 		ColumnsLabel: data.Labels.T("control.columns"), Lines: data.TableLines(), Complete: true, PageSize: 25,
-		SearchName: "q", SearchPlaceholder: data.Labels.T("control.search"),
-		Filters: []components.DataTableFilter{{Key: "status", Label: data.Labels.T("field.status"), Options: data.WithdrawalStatusOptions(), Selected: selected}},
+		State: components.DataTableValues{Facets: map[string][]string{"status": selected}}, HeaderMenu: true,
+		Searchable: true, SearchPlaceholder: data.Labels.T("control.search"),
+		Filters: []components.DataTableFilter{{Key: "status", Label: data.Labels.T("field.status"), Options: data.WithdrawalStatusOptions()}},
 		Columns: []components.TableColumn{
 			{Label: data.Labels.T("field.requested_at"), Key: "requested_at", Sortable: true},
 			{Label: data.Labels.T("noun.affiliate"), Key: "affiliate", Sortable: true},

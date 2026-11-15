@@ -161,7 +161,7 @@ func main() {
 	paying.PayURL = "/afiliado/admin/withdrawals/w2/payment"
 	row := affiliate.AffiliateRow{ID: "a1", Name: "Ana Souza", Code: "ana", Document: "529.982.247-25", User: "user-ana",
 		Status: "Ativo", StatusKey: "active", Active: true, Created: "01/10/2026 09:00", URL: "/afiliado/admin/affiliates/a1"}
-	table := affiliate.TableState{URL: "/afiliado/admin/commissions", CurrentPage: 1, Pages: 3, Total: 61}
+	table := affiliate.TableState{URL: "/afiliado/admin/commissions", CurrentPage: 1, Pages: 3, Total: 61, Rows: 1, PerPage: 25}
 	pages := []struct {
 		name string
 		data any
@@ -170,14 +170,14 @@ func main() {
 		{affiliate.ViewDashboard, affiliate.DashboardPageData{Screen: sc, Name: "Ana Souza", Code: "ana", Link: "https://app.example/r/ana",
 			Plan: &plan, From: "2026-10-01", To: "2026-10-12", Clicks: 42, Signups: 7, Sales: 3, Commissions: "R$ 29,85",
 			Balance: "R$ 300,00", Held: "R$ 0,00", Available: "R$ 300,00", Negative: true, Min: "R$ 100,00", Max: "—",
-			Rows: []affiliate.CommissionRow{commission}, Table: affiliate.TableState{URL: "/afiliado/me", CurrentPage: 1, Pages: 1, Total: 1},
+			Rows: []affiliate.CommissionRow{commission}, Table: affiliate.TableState{URL: "/afiliado/me", CurrentPage: 1, Pages: 1, Total: 1, Rows: 1, PerPage: 25},
 			Accounts: []affiliate.AccountOption{{ID: "acc-1", Label: "PIX ana@example.com"}},
 			Withdrawals: []affiliate.WithdrawalRow{withdrawal}, WithdrawURL: "/afiliado/me/withdrawals", AccountURL: "/afiliado/me/payout-accounts"},
 			[]string{"Seu link de indicação", "https://app.example/r/ana", "Copiar", "R$ 9,95", "Nível 1", "5,00%", "/afiliado/me/withdrawals", "Chave PIX", "saldo está negativo", "42"}},
 		{affiliate.ViewAdminPlans, affiliate.AdminPlansPageData{Screen: sc, Plans: []affiliate.PlanRow{plan, idle}, StoreURL: "/afiliado/admin/plans"},
 			[]string{"Planos de comissão", "Padrão", "1º 5,00%", "/afiliado/admin/plans/p2/activation", "Novo plano"}},
 		{affiliate.ViewAdminAffiliates, affiliate.AdminAffiliatesPageData{Screen: sc, Rows: []affiliate.AffiliateRow{row},
-			Table: affiliate.TableState{URL: "/afiliado/admin/affiliates", CurrentPage: 1, Pages: 2, Total: 30}, StoreURL: "/afiliado/admin/affiliates"},
+			Table: affiliate.TableState{URL: "/afiliado/admin/affiliates", CurrentPage: 1, Pages: 2, Total: 30, Rows: 1, PerPage: 25}, StoreURL: "/afiliado/admin/affiliates"},
 			[]string{"Ana Souza", "/afiliado/admin/affiliates/a1", "Novo afiliado", "/afiliado/admin/commissions"}},
 		{affiliate.ViewAdminAffiliate, affiliate.AdminAffiliatePageData{Screen: sc, Affiliate: row, Link: "https://app.example/r/ana",
 			Balance: "-R$ 50,00", Held: "R$ 0,00", Available: "R$ 0,00", Negative: true, Clicks: 42, Signups: 7, Sales: 3, Commissions: "R$ 29,85",

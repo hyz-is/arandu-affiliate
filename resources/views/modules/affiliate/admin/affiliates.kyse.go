@@ -30,22 +30,17 @@ func affiliatesTable(data AffiliatesData) components.DataTableProps {
 			{Text: a.Created},
 		}})
 	}
-	var statuses []string
-	if data.Status != "" {
-		statuses = []string{data.Status}
-	}
 	return components.DataTableProps{
 		ID: "affiliate-registry", Label: data.Labels.T("screen.admin_affiliates_title"), URL: data.Table.URL,
 		Caption: data.Labels.T("screen.admin_affiliates_lead"), ColumnsLabel: data.Labels.T("control.columns"), Lines: data.TableLines(),
-		Query: data.Table.Query, SearchName: "q", SearchPlaceholder: data.Labels.T("control.search"),
-		Filters: []components.DataTableFilter{{Key: "status", Label: data.Labels.T("field.status"), Options: data.AffiliateStatusOptions(), Selected: statuses}},
-		SortKey: data.Table.Sort, SortDir: data.Table.Dir,
-		Page: data.Table.CurrentPage, Pages: data.Table.Pages, Total: data.Table.Total,
+		State: data.Table.State(), Paginator: data.Table.Pager(), FullPager: true, HeaderMenu: true,
+		Searchable: true, SearchPlaceholder: data.Labels.T("control.search"),
+		Filters: []components.DataTableFilter{{Key: "status", Label: data.Labels.T("field.status"), Options: data.AffiliateStatusOptions()}},
 		Columns: []components.TableColumn{
 			{Label: data.Labels.T("field.name"), Key: "name", Sortable: true},
 			{Label: data.Labels.T("field.code"), Key: "code", Sortable: true},
 			{Label: data.Labels.T("field.document"), Key: "document", Hideable: true},
-			{Label: data.Labels.T("field.user"), Key: "user", Hideable: true, Hidden: true},
+			{Label: data.Labels.T("field.user"), Key: "user", Hideable: true},
 			{Label: data.Labels.T("field.status"), Key: "status", Sortable: true},
 			{Label: data.Labels.T("field.created_at"), Key: "created_at", Sortable: true, Hideable: true},
 		},
