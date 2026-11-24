@@ -250,7 +250,7 @@ func (s Screen) LevelOptions() []components.SelectOption {
 
 // CommissionStatusOptions are where a commission can stand.
 func (s Screen) CommissionStatusOptions() []components.SelectOption {
-	return s.options("status", string(CommissionAvailable), string(CommissionReversed))
+	return s.options("status", string(CommissionAvailable), string(CommissionPending), string(CommissionReversed), string(CommissionCancelled))
 }
 
 // AffiliateStatusOptions are where an affiliate can stand.
@@ -280,6 +280,16 @@ func planRow(prefix string, l Labels, p PlanView, loc *time.Location) PlanRow {
 		ID: p.Plan.ID, Name: p.Plan.Name, Kind: l.T("kind." + string(p.Plan.Kind)), KindKey: string(p.Plan.Kind),
 		Min: brl(p.Plan.MinWithdrawal), Max: "—", CookieDays: p.Plan.CookieDays, Active: bool(p.Plan.Active),
 		Created: dateTime(p.Plan.CreatedAt, loc), ActivateURL: prefix + adminSegment + "/plans/" + p.Plan.ID + "/activation",
+		Duration: ruleText(l, p.Plan.MaxMonths, p.Plan.MaxPayments), AnnualBase: "—", Grace: "—", PriorPayer: "—",
+	}
+	if base := p.Plan.AnnualBase(); base < FullBaseBps {
+		row.AnnualBase = percentText(base)
+	}
+	if p.Plan.GraceDays > 0 {
+		row.Grace = strconv.Itoa(p.Plan.GraceDays) + " " + l.T("unit.days")
+	}
+	if p.Plan.PriorPayerMonths > 0 {
+		row.PriorPayer = strconv.Itoa(p.Plan.PriorPayerMonths) + " " + l.T("unit.months")
 	}
 	if p.Plan.MaxWithdrawal > 0 {
 		row.Max = brl(p.Plan.MaxWithdrawal)
@@ -290,6 +300,22 @@ func planRow(prefix string, l Labels, p PlanView, loc *time.Location) PlanRow {
 	return row
 }
 
+// ruleText words the duration limit of a plan: "6 months", "12 payments", both
+// together, or "—" when the plan has neither.
+func ruleText(l Labels, months, payments int) string {
+	var parts []string
+	if months > 0 {
+		parts = append(parts, strconv.Itoa(months)+" "+l.T("unit.months"))
+	}
+	if payments > 0 {
+		parts = append(parts, strconv.Itoa(payments)+" "+l.T("unit.payments"))
+	}
+	if len(parts) == 0 {
+		return "—"
+	}
+	return strings.Join(parts, " / ")
+}
+
 // affiliateRow is an affiliate as a list shows it.
 func affiliateRow(prefix string, l Labels, a *Affiliate, loc *time.Location) AffiliateRow {
 	document := br.CPF(a.Document)
@@ -297,7 +323,7 @@ func affiliateRow(prefix string, l Labels, a *Affiliate, loc *time.Location) Aff
 		document = br.CNPJ(a.Document)
 	}
 	return AffiliateRow{
-		ID: a.ID, Name: a.Name, Code: a.Code, Document: document, User: a.UserID,
+		ID: a.ID, Name: a.Name, Code: a.Code, Coupon: string(a.CouponCode), Document: document, User: a.UserID,
 		Status: l.Status(string(a.Status)), StatusKey: string(a.Status), Active: a.IsActive(),
 		Created: dateTime(a.CreatedAt, loc), URL: prefix + adminSegment + "/affiliates/" + a.ID,
 	}
@@ -311,8 +337,11 @@ func commissionRows(prefix string, l Labels, views []CommissionView, loc *time.L
 		row := CommissionRow{
 			ID: c.ID, Date: dateTime(c.CreatedAt, loc), Level: c.Level, Rate: percentText(c.RateBps),
 			Amount: brl(c.Amount), AmountSort: sortCents(c.Amount), Status: l.Status(string(c.Status)), StatusKey: string(c.Status),
-			Reason: c.ReversedReason, Reversible: c.Status == CommissionAvailable,
+			Reason: c.ReversedReason, Reversible: c.Status == CommissionAvailable || c.Status == CommissionPending, ReleaseAt: "—",
 			ReverseURL: prefix + adminSegment + "/commissions/" + c.ID + "/reversal",
+		}
+		if c.ReleaseAt != nil && c.Status == CommissionPending {
+			row.ReleaseAt = dateTime(*c.ReleaseAt, loc)
 		}
 		if v.Conversion != nil {
 			row.Order, row.Buyer, row.Product = v.Conversion.OrderRef, v.Conversion.BuyerUserID, v.Conversion.ProductID

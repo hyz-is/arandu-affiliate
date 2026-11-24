@@ -57,7 +57,19 @@
         "account_type": "Tipo de conta bancária",
         "network": "Rede",
         "address": "Endereço da carteira",
-        "description": "Descrição"
+        "description": "Descrição",
+        "coupon": "Cupom",
+        "max_months": "Comissão dura (meses)",
+        "max_payments": "Comissão dura (pagamentos)",
+        "annual_base": "Parte do pagamento anual (%)",
+        "grace_days": "Carência (dias)",
+        "prior_payer_months": "Sem comissão se já pagou nos últimos (meses)",
+        "duration": "Duração",
+        "grace": "Carência",
+        "prior_payer": "Já pagante",
+        "pending": "A liberar",
+        "release_at": "Libera em",
+        "annual_base_short": "Base anual"
     },
     "screen": {
         "dashboard_title": "Painel do afiliado",
@@ -99,7 +111,16 @@
         "admin_withdrawals_title": "Saques dos afiliados",
         "admin_withdrawals_lead": "Faça o PIX fora do sistema e anexe o comprovante.",
         "not_affiliate": "Você não está cadastrado como afiliado.",
-        "blocked_note": "Seu cadastro de afiliado está bloqueado: você não recebe novas comissões nem pede saques."
+        "blocked_note": "Seu cadastro de afiliado está bloqueado: você não recebe novas comissões nem pede saques.",
+        "rules_title": "Regras comerciais",
+        "rules_hint": "Em branco ou zero desliga a regra: o plano paga como sempre pagou.",
+        "coupon_title": "Seu cupom",
+        "coupon_lead": "Quem digitar o cupom no pagamento, antes da primeira compra, fica ligado a você, por qualquer link que tenha chegado.",
+        "coupon_none": "Você não tem cupom.",
+        "coupon_admin_title": "Cupom",
+        "coupon_admin_lead": "Único no programa. Vazio remove. Quem já foi indicado mantém o indicador.",
+        "pending_title": "A liberar",
+        "pending_lead": "Ganha e aguardando a carência. Entra no saldo na data de liberação e não pode ser sacada antes."
     },
     "control": {
         "save": "Salvar",
@@ -120,7 +141,8 @@
         "columns": "Colunas",
         "search": "Buscar",
         "all": "Todos",
-        "open": "Abrir"
+        "open": "Abrir",
+        "save_coupon": "Salvar cupom"
     },
     "status": {
         "active": "Ativo",
@@ -128,7 +150,9 @@
         "available": "Disponível",
         "reversed": "Estornada",
         "counted": "Contada",
-        "refunded": "Reembolsada"
+        "refunded": "Reembolsada",
+        "pending": "Pendente",
+        "cancelled": "Cancelada"
     },
     "withdrawal": {
         "requested": "Pedido",
@@ -186,5 +210,10 @@
         "asc": "Crescente",
         "desc": "Decrescente",
         "hide": "Ocultar"
+    },
+    "unit": {
+        "days": "dias",
+        "months": "meses",
+        "payments": "pagamentos"
     }
 }

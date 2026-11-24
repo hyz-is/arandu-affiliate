@@ -33,6 +33,10 @@ func plansTable(data PlansData) components.DataTableProps {
 			{Text: strconv.Itoa(p.CookieDays)},
 			{Text: p.Min},
 			{Text: p.Max},
+			{Text: p.Duration},
+			{Text: p.AnnualBase},
+			{Text: p.Grace},
+			{Text: p.PriorPayer},
 			{Text: p.Created},
 			{HTML: state},
 		}})
@@ -47,6 +51,10 @@ func plansTable(data PlansData) components.DataTableProps {
 			{Label: data.Labels.T("field.cookie_days"), Key: "cookie_days", Hideable: true},
 			{Label: data.Labels.T("field.min_withdrawal"), Key: "min", Hideable: true},
 			{Label: data.Labels.T("field.max_withdrawal"), Key: "max", Hideable: true},
+			{Label: data.Labels.T("field.duration"), Key: "duration", Hideable: true},
+			{Label: data.Labels.T("field.annual_base_short"), Key: "annual_base", Hideable: true},
+			{Label: data.Labels.T("field.grace"), Key: "grace", Hideable: true},
+			{Label: data.Labels.T("field.prior_payer"), Key: "prior_payer", Hideable: true},
 			{Label: data.Labels.T("field.created_at"), Key: "created", Hideable: true},
 			{Label: data.Labels.T("field.active"), Key: "active"},
 		},
@@ -81,6 +89,18 @@ func plansTable(data PlansData) components.DataTableProps {
 				{!! components.Field(components.FieldProps{Name: "max_withdrawal_brl", Label: .Labels.T("field.max_withdrawal"), Placeholder: "0", Page: .Form()}) !!}
 			</div>
 			{!! components.Field(components.FieldProps{Name: "cookie_days", Label: .Labels.T("field.cookie_days"), Type: "number", Value: "30", Page: .Form()}) !!}
+			<fieldset class="grid gap-3">
+				<legend class="text-muted-foreground text-xs">{{ .Labels.T("screen.rules_title") }} · {{ .Labels.T("screen.rules_hint") }}</legend>
+				<div class="grid gap-3 sm:grid-cols-2">
+					{!! components.Field(components.FieldProps{Name: "max_months", Label: .Labels.T("field.max_months"), Type: "number", Placeholder: "0", Page: .Form()}) !!}
+					{!! components.Field(components.FieldProps{Name: "max_payments", Label: .Labels.T("field.max_payments"), Type: "number", Placeholder: "0", Page: .Form()}) !!}
+				</div>
+				<div class="grid gap-3 sm:grid-cols-2">
+					{!! components.Field(components.FieldProps{Name: "annual_base_pct", Label: .Labels.T("field.annual_base"), Placeholder: "100", Page: .Form()}) !!}
+					{!! components.Field(components.FieldProps{Name: "grace_days", Label: .Labels.T("field.grace_days"), Type: "number", Placeholder: "0", Page: .Form()}) !!}
+				</div>
+				{!! components.Field(components.FieldProps{Name: "prior_payer_months", Label: .Labels.T("field.prior_payer_months"), Type: "number", Placeholder: "0", Page: .Form()}) !!}
+			</fieldset>
 			<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="input" name="activate" value="1" checked> {{ .Labels.T("control.activate") }}</label>
 			<div>{!! components.Button(components.ButtonProps{Label: .Labels.T("control.save"), Type: "submit"}) !!}</div>
 		</form>

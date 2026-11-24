@@ -78,12 +78,23 @@ func treeTable(data AffiliateData) components.DataTableProps {
 		</div>
 	</header>
 
-	<dl class="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+	<dl class="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
 		<div class="card p-4"><dt class="text-muted-foreground text-xs">{{ .Labels.T("field.balance") }}</dt><dd class="mt-1 text-xl font-semibold tabular-nums">{{ .Balance }}</dd></div>
 		<div class="card p-4"><dt class="text-muted-foreground text-xs">{{ .Labels.T("field.held") }}</dt><dd class="mt-1 text-xl font-semibold tabular-nums">{{ .Held }}</dd></div>
+		<div class="card p-4"><dt class="text-muted-foreground text-xs">{{ .Labels.T("field.pending") }}</dt><dd class="mt-1 text-xl font-semibold tabular-nums">{{ .Pending }}</dd></div>
 		<div class="card p-4"><dt class="text-muted-foreground text-xs">{{ .Labels.T("field.clicks") }} · {{ .Labels.T("field.signups") }} · {{ .Labels.T("field.sales") }}</dt><dd class="mt-1 text-xl font-semibold tabular-nums">{{ .Clicks }} · {{ .Signups }} · {{ .Sales }}</dd></div>
 		<div class="card p-4"><dt class="text-muted-foreground text-xs">{{ .Labels.T("field.commissions") }}</dt><dd class="mt-1 text-xl font-semibold tabular-nums">{{ .Commissions }}</dd></div>
 	</dl>
+
+	<form class="card mt-6 flex flex-wrap items-end gap-3 p-5" method="post" action="{{ .CouponURL }}">
+		@csrf
+		<div class="grow">
+			<h2 class="text-base font-semibold">{{ .Labels.T("screen.coupon_admin_title") }}</h2>
+			<p class="text-muted-foreground text-sm">{{ .Labels.T("screen.coupon_admin_lead") }}</p>
+			{!! components.Field(components.FieldProps{Name: "coupon", Label: .Labels.T("field.coupon"), Value: .Affiliate.Coupon, Page: .Form()}) !!}
+		</div>
+		{!! components.Button(components.ButtonProps{Label: .Labels.T("control.save_coupon"), Type: "submit", Variant: "outline"}) !!}
+	</form>
 
 	@if(.Negative)
 		<form class="card mt-6 flex flex-wrap items-end gap-3 p-5" method="post" action="{{ .WriteOffURL }}">

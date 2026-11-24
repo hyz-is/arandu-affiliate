@@ -57,7 +57,19 @@
         "account_type": "Bank account type",
         "network": "Network",
         "address": "Wallet address",
-        "description": "Description"
+        "description": "Description",
+        "coupon": "Coupon",
+        "max_months": "Commission lasts (months)",
+        "max_payments": "Commission lasts (payments)",
+        "annual_base": "Share of an annual payment (%)",
+        "grace_days": "Grace period (days)",
+        "prior_payer_months": "No commission if already a payer in the last (months)",
+        "duration": "Duration",
+        "grace": "Grace",
+        "prior_payer": "Prior payer",
+        "pending": "To be released",
+        "release_at": "Releases on",
+        "annual_base_short": "Annual base"
     },
     "screen": {
         "dashboard_title": "Affiliate panel",
@@ -99,7 +111,16 @@
         "admin_withdrawals_title": "Affiliates' withdrawals",
         "admin_withdrawals_lead": "Make the PIX outside the system and attach the receipt.",
         "not_affiliate": "You are not registered as an affiliate.",
-        "blocked_note": "Your affiliate registration is blocked: you earn no new commissions and cannot withdraw."
+        "blocked_note": "Your affiliate registration is blocked: you earn no new commissions and cannot withdraw.",
+        "rules_title": "Commercial rules",
+        "rules_hint": "Blank or zero turns a rule off: the plan then pays as it always did.",
+        "coupon_title": "Your coupon",
+        "coupon_lead": "A customer who types it at checkout before their first payment is referred by you, whichever link they came through.",
+        "coupon_none": "You have no coupon.",
+        "coupon_admin_title": "Coupon",
+        "coupon_admin_lead": "Unique in the program. Empty removes it. Users already referred keep their referrer.",
+        "pending_title": "To be released",
+        "pending_lead": "Earned, and waiting out the grace period. It enters the balance on the release date and cannot be withdrawn before."
     },
     "control": {
         "save": "Save",
@@ -120,7 +141,8 @@
         "columns": "Columns",
         "search": "Search",
         "all": "All",
-        "open": "Open"
+        "open": "Open",
+        "save_coupon": "Save coupon"
     },
     "status": {
         "active": "Active",
@@ -128,7 +150,9 @@
         "available": "Available",
         "reversed": "Reversed",
         "counted": "Counted",
-        "refunded": "Refunded"
+        "refunded": "Refunded",
+        "pending": "Pending",
+        "cancelled": "Cancelled"
     },
     "withdrawal": {
         "requested": "Requested",
@@ -186,5 +210,10 @@
         "asc": "Asc",
         "desc": "Desc",
         "hide": "Hide"
+    },
+    "unit": {
+        "days": "days",
+        "months": "months",
+        "payments": "payments"
     }
 }

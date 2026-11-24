@@ -135,6 +135,7 @@ func (m *Module) Routes(r *fhttp.Router) {
 	r.Action(stdhttp.MethodGet, admin+"/affiliates/{id}", m.showAffiliate).Name("affiliate.admin.affiliates.show")
 	r.Action(stdhttp.MethodPost, admin+"/affiliates/{id}/block", m.block).Name("affiliate.admin.affiliates.block")
 	r.Action(stdhttp.MethodDelete, admin+"/affiliates/{id}/block", m.unblock).Name("affiliate.admin.affiliates.unblock")
+	r.Action(stdhttp.MethodPost, admin+"/affiliates/{id}/coupon", m.setCoupon).Name("affiliate.admin.affiliates.coupon")
 	r.Action(stdhttp.MethodPost, admin+"/affiliates/{id}/write-off", m.writeOff).Name("affiliate.admin.affiliates.write_off")
 	r.Action(stdhttp.MethodGet, admin+"/commissions", m.commissions).Name("affiliate.admin.commissions.index")
 	r.Action(stdhttp.MethodPost, admin+"/commissions/{id}/reversal", m.reverseCommission).Name("affiliate.admin.commissions.reverse")
@@ -291,7 +292,8 @@ func (m *Module) dashboard(ctx *fhttp.Context) error {
 	if ctx.WantsJSON() {
 		return ctx.JSON(stdhttp.StatusOK, fieldsResource{
 			"id": me.ID, "code": me.Code, "link": m.link(ctx, me.Code), "status": string(me.Status),
-			"balance": balance.Balance, "held": balance.Held, "available": balance.Available,
+			"coupon":  string(me.CouponCode),
+			"balance": balance.Balance, "held": balance.Held, "available": balance.Available, "pending": balance.Pending,
 			"period": map[string]any{"from": string(from), "to": string(to), "clicks": stats.Clicks,
 				"signups": stats.Signups, "sales": stats.Sales, "commissions": stats.Commissions},
 		})
@@ -315,10 +317,11 @@ func (m *Module) dashboard(ctx *fhttp.Context) error {
 	}
 	sc := m.screen(ctx, who, "screen.dashboard_title")
 	data := DashboardPageData{
-		Screen: sc, Name: me.Name, Code: me.Code, Link: m.link(ctx, me.Code), Blocked: !me.IsActive(),
+		Screen: sc, Name: me.Name, Code: me.Code, Coupon: string(me.CouponCode), Link: m.link(ctx, me.Code), Blocked: !me.IsActive(),
 		From: string(from), To: string(to),
-		Clicks: stats.Clicks, Signups: stats.Signups, Sales: stats.Sales, Commissions: brl(stats.Commissions),
-		Balance: brl(balance.Balance), Held: brl(balance.Held), Available: brl(balance.Available), Negative: balance.Balance < 0,
+		Clicks: stats.Clicks, Signups: stats.Signups, Sales: stats.Sales, Commissions: brl(stats.Commissions), PendingCommissions: brl(stats.Pending),
+		Balance: brl(balance.Balance), Held: brl(balance.Held), Available: brl(balance.Available), Pending: brl(balance.Pending),
+		Negative: balance.Balance < 0, HasPending: balance.Pending > 0,
 		Rows:  commissionRows(m.cfg.Prefix, sc.Labels, rows, m.cfg.Location),
 		Level: ctx.Query("level"), Status: ctx.Query("status"),
 		Table: TableState{URL: m.cfg.Prefix + "/me", Sort: q.Sort, Dir: q.Dir, CurrentPage: q.Page,
@@ -362,6 +365,27 @@ func (m *Module) storeAccount(ctx *fhttp.Context) error {
 		return ctx.Redirect(m.cfg.Prefix + "/me")
 	}
 	return ctx.JSON(stdhttp.StatusCreated, fieldsResource{"id": account.ID, "kind": account.Kind, "label": account.Label})
+}
+
+// wholeNumber reads a count a form or an API sends, zero when it is blank or
+// not a number, which every rule of a plan reads as "off".
+func wholeNumber(ctx *fhttp.Context, field string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(ctx.Input(field)))
+	return n
+}
+
+// annualBase reads the share of an annual payment a plan pays on: annual_base_bps
+// from the API, or annual_base_pct from a form, as a percentage.
+func annualBase(ctx *fhttp.Context) int64 {
+	if raw := ctx.Input("annual_base_bps"); raw != "" {
+		v, _ := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		return v
+	}
+	if raw := ctx.Input("annual_base_pct"); raw != "" {
+		v, _ := parseReais(raw)
+		return v
+	}
+	return 0
 }
 
 // centavos reads an amount in centavos from a field, or in reais from the
@@ -425,8 +449,9 @@ func (m *Module) plans(ctx *fhttp.Context) error {
 }
 
 // storePlan defines a plan. A form types the rates as percentages
-// ("5; 2; 1") and the limits in reais; the API sends rate_bps repeated and
-// centavos.
+// ("5; 2; 1"), the limits in reais and the share of an annual payment as a
+// percentage ("50"); the API sends rate_bps repeated, centavos and
+// annual_base_bps.
 func (m *Module) storePlan(ctx *fhttp.Context) error {
 	if err := ctx.Request.ParseForm(); err != nil {
 		return validation.Errors{"form": {"could not be read"}}
@@ -451,6 +476,8 @@ func (m *Module) storePlan(ctx *fhttp.Context) error {
 	plan, err := m.svc.CreatePlan(ctx.Ctx(), who, PlanRequest{
 		Name: ctx.Input("name"), Kind: PlanKind(ctx.Input("kind")), Rates: rates, CookieDays: days,
 		MinWithdrawal: centavos(ctx, "min_withdrawal"), MaxWithdrawal: centavos(ctx, "max_withdrawal"),
+		MaxMonths: wholeNumber(ctx, "max_months"), MaxPayments: wholeNumber(ctx, "max_payments"),
+		AnnualBaseBps: annualBase(ctx), GraceDays: wholeNumber(ctx, "grace_days"), PriorPayerMonths: wholeNumber(ctx, "prior_payer_months"),
 	}, ctx.Input("activate") == "1" || ctx.Input("activate") == "true")
 	if err != nil {
 		return err
@@ -509,6 +536,7 @@ func (m *Module) storeAffiliate(ctx *fhttp.Context) error {
 	who, _ := ctx.User()
 	a, err := m.svc.Create(ctx.Ctx(), who, CreateRequest{
 		UserID: ctx.Input("user_id"), Name: ctx.Input("name"), Document: ctx.Input("document"), Code: ctx.Input("code"),
+		CouponCode: ctx.Input("coupon"),
 	})
 	if err != nil {
 		return err
@@ -547,7 +575,7 @@ func (m *Module) showAffiliate(ctx *fhttp.Context) error {
 				"affiliate_id": n.AffiliateID, "code": n.Code, "joined_at": n.JoinedAt.UTC().Format(time.RFC3339)})
 		}
 		out := affiliatesResource{rows: []*Affiliate{a}, total: 1}.ToArray()
-		out["balance"], out["held"], out["tree"] = balance.Balance, balance.Held, nodes
+		out["balance"], out["held"], out["pending"], out["tree"] = balance.Balance, balance.Held, balance.Pending, nodes
 		return ctx.JSON(stdhttp.StatusOK, fieldsResource(out))
 	}
 	sc := m.screen(ctx, who, "screen.admin_affiliate_title")
@@ -556,8 +584,9 @@ func (m *Module) showAffiliate(ctx *fhttp.Context) error {
 		Screen: sc, Affiliate: affiliateRow(m.cfg.Prefix, sc.Labels, a, m.cfg.Location), Link: m.link(ctx, a.Code),
 		Balance: brl(balance.Balance), Held: brl(balance.Held), Available: brl(balance.Available), Negative: balance.Balance < 0,
 		Clicks: stats.Clicks, Signups: stats.Signups, Sales: stats.Sales, Commissions: brl(stats.Commissions),
+		Pending:  brl(balance.Pending),
 		Tree:     treeRows(m.cfg.Prefix, sc.Labels, tree, m.cfg.Location),
-		BlockURL: base + "/block", WriteOffURL: base + "/write-off",
+		BlockURL: base + "/block", WriteOffURL: base + "/write-off", CouponURL: base + "/coupon",
 		CommissionsURL: m.cfg.Prefix + adminSegment + "/commissions?affiliate=" + url.QueryEscape(a.ID),
 	})
 }
@@ -579,6 +608,20 @@ func (m *Module) block(ctx *fhttp.Context) error {
 func (m *Module) unblock(ctx *fhttp.Context) error {
 	who, _ := ctx.User()
 	a, err := m.svc.SetBlocked(ctx.Ctx(), who, ctx.Param("id"), false)
+	if err != nil {
+		return err
+	}
+	if !ctx.WantsJSON() {
+		return ctx.Redirect(m.cfg.Prefix + adminSegment + "/affiliates/" + a.ID)
+	}
+	return ctx.JSON(stdhttp.StatusOK, affiliatesResource{rows: []*Affiliate{a}, total: 1})
+}
+
+// setCoupon gives an affiliate a coupon, replaces it, or removes it when the
+// field is empty.
+func (m *Module) setCoupon(ctx *fhttp.Context) error {
+	who, _ := ctx.User()
+	a, err := m.svc.SetCoupon(ctx.Ctx(), who, ctx.Param("id"), ctx.Input("coupon"))
 	if err != nil {
 		return err
 	}
@@ -635,9 +678,13 @@ func (m *Module) reverseCommission(ctx *fhttp.Context) error {
 	return ctx.JSON(stdhttp.StatusOK, fieldsResource{"id": c.ID, "status": string(c.Status)})
 }
 
+// truthy reads a yes-or-no a form or an API sends.
+func truthy(v string) bool { return v == "1" || v == "true" }
+
 // storeConversion records a payment, by the admin's hand or the
 // application's client: order_ref, buyer_user_id, product_id, amount in
-// centavos (or amount_brl), renewal, occurred_at in RFC 3339.
+// centavos (or amount_brl), renewal, annual, buyer_document, prior_payer,
+// occurred_at in RFC 3339.
 func (m *Module) storeConversion(ctx *fhttp.Context) error {
 	at := time.Now()
 	if raw := ctx.Input("occurred_at"); raw != "" {
@@ -650,7 +697,8 @@ func (m *Module) storeConversion(ctx *fhttp.Context) error {
 	who, _ := ctx.User()
 	conversion, paid, err := m.svc.RecordConversion(ctx.Ctx(), who, ConversionRequest{
 		OrderRef: ctx.Input("order_ref"), BuyerUserID: ctx.Input("buyer_user_id"), ProductID: ctx.Input("product_id"),
-		Amount: centavos(ctx, "amount"), Renewal: ctx.Input("renewal") == "1" || ctx.Input("renewal") == "true", OccurredAt: at,
+		Amount: centavos(ctx, "amount"), Renewal: truthy(ctx.Input("renewal")), Annual: truthy(ctx.Input("annual")),
+		BuyerDocument: ctx.Input("buyer_document"), PriorPayer: truthy(ctx.Input("prior_payer")), OccurredAt: at,
 	})
 	if err != nil {
 		return err
