@@ -10,9 +10,49 @@ a release is corrected by another release and never by moving a tag.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-24
+
+The commercial rules of a plan, for a contract that pays a commission for a
+limited time, on part of an annual payment, after a grace period, and not on a
+buyer who already paid. Every rule is off at zero, so a plan that sets none pays
+as before. Requires `aru migrate`.
+
+### Added
+
+- Plan rules: `MaxMonths` and `MaxPayments` end a buyer's commission, counted
+  from their first referred payment; `AnnualBaseBps` is the share of an annual
+  payment (`ConversionRequest.Annual`) the rates apply to; `GraceDays` keeps a
+  commission pending before it reaches the wallet; `PriorPayerMonths` withholds
+  the commission of a buyer who had already paid. A payment the rules leave
+  without a commission is recorded, with `Conversion.SkippedReason`
+  (`SkipDurationLimit`, `SkipPaymentLimit`, `SkipPriorPayer`), and not rejected.
+- `ConversionRequest.Annual`, `BuyerDocument` and `PriorPayer`; `Conversion.Annual`,
+  `BuyerDocument` and `SkippedReason`; `Commission.BaseAmount` and `ReleaseAt`.
+- `CommissionPending` and `CommissionCancelled`. `ReleaseDue(ctx, actor, now)`
+  deposits the commissions whose grace period ended, once each; a refund inside
+  the grace period cancels the pending commission without touching the wallet.
+  `Balance.Pending` and `Stats.Pending` read what is waiting.
+- Coupons: `Affiliate.CouponCode`, `CreateRequest.CouponCode`, `SetCoupon` and
+  the route `POST {prefix}/admin/affiliates/{id}/coupon`, named
+  `affiliate.admin.affiliates.coupon`. `AttributeRequest.Coupon` prevails over
+  `Code` and moves a user who has not paid; `Referral.Source` is `ReferralLink`
+  or `ReferralCoupon`. New refusals: `ErrCouponNotFound`, `ErrCouponTooLate`,
+  `ErrCouponTaken`.
+- The panels: the plan form and list carry the rules, the affiliate's panel
+  shows the coupon and the pending commissions apart from the balance, and the
+  commission lists show when a pending commission is released. The JSON of
+  plans, conversions, commissions and the panel carries the new fields.
+- Migrations `20261124_0009_add_plan_commercial_rules`,
+  `20261124_0010_add_conversion_rule_columns`, `20261124_0011_add_commission_release`,
+  `20261124_0012_add_affiliate_coupon` and `20261124_0013_add_referral_source`;
+  all additive, with defaults that keep every existing row's behaviour.
+
 ### Changed
 
-- The lists are drawn with Kyse's server-side data table: the three server-paged
+- The generated queries are rebuilt with the current model builder
+  (`ApplyListing` and `Listing`).
+
+- (Shipped in the v0.3.0 and v0.3.1 tags, which were never given notes.) The lists are drawn with Kyse's server-side data table: the three server-paged
   lists hand it a `State` (`TableState.State`) and a `Paginator`
   (`TableState.Pager`) instead of a query, a sort, the page numbers and the
   chosen values, and the columns a reader switched off survive a search, an

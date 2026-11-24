@@ -26,8 +26,9 @@ PIX with the receipt attached.
    walks up the tree from the buyer and pays each level the rate of the plan in
    force: level one is the buyer's referrer, level two the referrer's referrer,
    up to four. A blocked affiliate's level is skipped; the levels above still
-   earn. The commission is deposited at once — no waiting period — and stays in
-   the wallet until withdrawn.
+   earn. The commission is deposited at once, unless the plan sets a grace
+   period (see [Commercial rules](#commercial-rules)), and stays in the wallet
+   until withdrawn.
 4. **The refund.** `RecordRefund` reverses every commission of the payment.
    The money leaves the wallet even past zero: a commission already withdrawn
    leaves the balance negative, which closes withdrawals until later
@@ -42,6 +43,84 @@ PIX with the receipt attached.
    with a reason, which frees the day.
 
 Money is `int64` centavos and rates are basis points (150 = 1,5%).
+
+## Commercial rules
+
+A plan can carry the rules of a commercial contract. Every one is **off at
+zero**, so a plan that sets none pays exactly as it always did, and the plans
+written before the rules existed keep doing so after `aru migrate`.
+
+| `PlanRequest` field | what it does | zero means |
+| --- | --- | --- |
+| `MaxMonths` | a payment made that many calendar months after the buyer's first referred payment pays nothing. Months are calendar months, clamped to the end of a shorter month (August 31 plus six months is February 28) | no limit |
+| `MaxPayments` | a payment after that many commissioned payments of the buyer pays nothing. With `MaxMonths`, whichever comes first | no limit |
+| `AnnualBaseBps` | the share of an annual payment (`ConversionRequest.Annual`) the rates apply to; 5000 pays on half | the whole payment (same as `FullBaseBps`, 10000) |
+| `GraceDays` | days after the payment (`OccurredAt`) a commission stays pending, outside the wallet, until `ReleaseDue` deposits it | deposited at once |
+| `PriorPayerMonths` | a buyer who had already paid within that many months before their first referred payment earns the affiliate nothing, for life | rule off |
+
+A payment past a limit, or by a prior payer, is **recorded and pays nothing**,
+not rejected: the conversion keeps its place in the history, is idempotent by
+`OrderRef` like any other, and says why in `Conversion.SkippedReason`
+(`duration_limit`, `payment_limit` or `prior_payer`). A refund of it is a no-op
+on commissions. The rules read the plan in force when each payment arrives.
+
+**The clock starts at the buyer's first referred payment**: the earliest counted
+conversion of that user that carried a referrer. A free trial is no payment — the
+application simply does not call `RecordConversion` until money moves.
+
+**Annual payments.** `ConversionRequest.Annual` marks a payment that covers a long
+period. The rate applies to `roundDiv(amount * AnnualBaseBps, 10000)`, half up to
+the centavo, and then `CommissionOf` rounds the commission half up the same way;
+`Commission.BaseAmount` records the base. An annual commission is one deposit.
+Its renewals respect `MaxMonths` and `MaxPayments` like any other payment.
+For the contract's numbers — 30% over six months, annual at half:
+
+| payment | base | commission |
+| --- | --- | --- |
+| monthly R$ 24,90, six payments | 24,90 each | 7,47 each, **R$ 44,82** |
+| annual R$ 238,80 | 119,40 | **R$ 35,82** |
+
+**Grace and release.** Under `GraceDays` a commission is `pending`: the affiliate's
+panel shows it apart from the balance, and it cannot be withdrawn. The
+application calls `ReleaseDue` from a daily job:
+
+```go
+	released, err := affiliateModule.Service().ReleaseDue(ctx, operator, time.Now())
+```
+
+It deposits each pending commission whose release date has come, with the same
+wallet key `RecordConversion` uses for an immediate one, so running it twice or
+twice at once deposits once. The wallet receives money only at release. A refund
+inside the grace period (`RecordRefund`, or the admin's reversal) **cancels** the
+pending commission (`cancelled`) and never touches the wallet; a refund after the
+release keeps the old behaviour — the amount leaves the wallet, the balance may go
+below zero, and later commissions cover it. A payment reported after its own grace
+period has already passed is deposited at once.
+
+**The buyer who already paid.** With `PriorPayerMonths` above zero, the module looks
+in its own conversions for a counted payment of the same `BuyerUserID`, or of the
+same `BuyerDocument`, in the window before the first referred payment. What the
+module cannot see, the application tells it with `ConversionRequest.PriorPayer`,
+read only while the plan asks for the rule. A buyer found to be a prior payer stays
+one on every later payment.
+
+**Coupons.** An affiliate may have one `CouponCode`, unique in the tenant and stored
+lowercase (`SetCoupon`, or `CreateRequest.CouponCode`; admin only). The customer's
+own typing at checkout carries it to `Attribute` as `AttributeRequest.Coupon`:
+
+- the coupon **prevails over the cookie's code** when both come;
+- it refers a user nobody referred, and **moves** a user who came through another
+  affiliate's link, **only while that user has no payment on record** (a refunded
+  one counts). After the first payment the request is refused with
+  `ErrCouponTooLate` and the referrer stays for life;
+- the module cannot tell who typed a coupon, so the application passes only what
+  the customer typed at checkout, never one an affiliate asked for afterwards;
+  no call moves a user who already has a payment on record;
+- a coupon that belongs to no active affiliate is refused with `ErrCouponNotFound`
+  and nothing is recorded, so the checkout may carry on with the cookie's code
+  alone. An affiliate's own coupon is `ErrSelfReferral`.
+
+Whoever has no coupon is unaffected, and a referral made by link stays for life.
 
 ## Install
 
@@ -110,6 +189,15 @@ The package owns eight tables; `arandu.mod.toml` says `migrations = true`.
 	})
 ```
 
+At checkout, the coupon the customer typed goes in `Coupon`; it prevails over `Code`
+until their first payment:
+
+```go
+	referral, err := affiliateModule.Service().Attribute(ctx, security.Guest(tenant), affiliate.AttributeRequest{
+		UserID: payer.ID, Coupon: typedCoupon, Code: affiliateModule.CodeFrom(r),
+	})
+```
+
 A refusal is a `validation.Errors` the sign-up may ignore: the user is created
 either way, without a referrer.
 
@@ -119,6 +207,7 @@ either way, without a referrer.
 	_, _, err := affiliateModule.Service().RecordConversion(ctx, operator, affiliate.ConversionRequest{
 		OrderRef: "mp:" + payment.ID, BuyerUserID: payment.UserID, ProductID: "placaflow",
 		Amount: 19900, Renewal: payment.IsRenewal, OccurredAt: payment.ApprovedAt,
+		Annual: payment.IsAnnual, BuyerDocument: payer.Document, // read by the plan's rules
 	})
 	// and when it is given back:
 	_, err = affiliateModule.Service().RecordRefund(ctx, operator, "mp:"+payment.ID, "chargeback")
@@ -204,6 +293,7 @@ asking with `ctx.User()`.
 | `GET`, `POST` | `/affiliate/admin/affiliates` | the affiliates, register one |
 | `GET` | `/affiliate/admin/affiliates/{id}` | one affiliate, with the tree |
 | `POST`, `DELETE` | `/affiliate/admin/affiliates/{id}/block` | block, unblock |
+| `POST` | `/affiliate/admin/affiliates/{id}/coupon` | give, change or remove the coupon |
 | `POST` | `/affiliate/admin/affiliates/{id}/write-off` | forgive a negative balance |
 | `GET` | `/affiliate/admin/commissions` | every commission |
 | `POST` | `/affiliate/admin/commissions/{id}/reversal` | reverse a commission |
