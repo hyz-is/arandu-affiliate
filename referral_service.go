@@ -24,6 +24,11 @@ var (
 	ErrSameTree = validation.Errors{"document": {"this person is already in the referrer's tree"}}
 	// ErrDocumentReferred is a document another referral already carries.
 	ErrDocumentReferred = validation.Errors{"document": {"this document was already referred"}}
+	// ErrCouponNotFound is a coupon that belongs to no active affiliate.
+	ErrCouponNotFound = validation.Errors{"coupon": {"this coupon belongs to no active affiliate"}}
+	// ErrCouponTooLate is a coupon typed by a user who already has a payment on
+	// record: it is accepted only before the first one.
+	ErrCouponTooLate = validation.Errors{"coupon": {"a coupon is accepted only before the first payment"}}
 )
 
 // maxTreeWalk bounds a walk up the tree. The tree is acyclic by
@@ -99,26 +104,42 @@ func addressHash(tenant, address string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
-// AttributeRequest is what a sign-up with a referral code records.
+// AttributeRequest is what a sign-up, or a checkout, with a referral code or a
+// coupon records.
 type AttributeRequest struct {
-	// UserID is the user who just signed up.
+	// UserID is the user who just signed up, or who is about to pay.
 	UserID string
 	// Code is the referral code, from the cookie the link set (CodeFrom).
 	Code string
+	// Coupon is the affiliate's coupon, as the customer typed it at checkout.
+	// When it is set it prevails over Code, and Code is not read.
+	Coupon string
 	// Document is the user's CPF or CNPJ, when the application has it.
 	// Without it, the tree is guarded by the user alone.
 	Document string
 }
 
-// Attribute links a user who signed up with a referral code to the
-// affiliate who owns it, for life. It is called by the application's sign-up,
-// with whatever subject it signs up as -- a guest of the tenant included.
+// Attribute links a user to the affiliate who referred them. It is called by
+// the application's sign-up, with whatever subject it signs up as -- a guest
+// of the tenant included -- and by its checkout.
 //
-// A user who already has a referrer keeps them: the answer is the existing
+// With a Code, the one the link's cookie carried, the link is for life: a
+// user who already has a referrer keeps them, and the answer is the existing
 // referral, unchanged. An empty code records nothing and answers nil. A code
 // that is no active affiliate's, an affiliate's own code, or a person already
 // in the referrer's tree is refused, and the sign-up goes on without a
 // referrer.
+//
+// With a Coupon, the coupon prevails over the link: a user who came through
+// another affiliate's link is moved to the coupon's owner, and a user nobody
+// referred is referred by them. Only the customer's own typing at checkout
+// carries a coupon -- an affiliate cannot assign one afterwards -- and only
+// before the first payment: a user who already has a payment on record, even a
+// refunded one, is never moved, and the request is refused with
+// ErrCouponTooLate. A coupon that is no active affiliate's is refused with
+// ErrCouponNotFound, nothing is recorded, and the application may ask again
+// with the cookie's code alone. A coupon of the user's current referrer
+// changes nothing.
 func (s *AffiliateService) Attribute(ctx context.Context, actor security.Subject, in AttributeRequest) (*Referral, error) {
 	g, err := security.Authorize(ctx, s.policy, actor, ReferralRecord, Affiliate{})
 	if err != nil {
@@ -128,12 +149,17 @@ func (s *AffiliateService) Attribute(ctx context.Context, actor security.Subject
 	if userID == "" {
 		return nil, validation.Errors{"user_id": {"is required"}}
 	}
-	if existing, err := Referrals(s.db).Where("user_id", "=", userID).First(ctx, g); err != nil || existing != nil {
-		return existing, err
+	existing, err := Referrals(s.db).Where("user_id", "=", userID).First(ctx, g)
+	if err != nil {
+		return nil, err
 	}
+	coupon := strings.ToLower(strings.TrimSpace(in.Coupon))
 	code := strings.ToLower(strings.TrimSpace(in.Code))
-	if code == "" {
-		return nil, nil
+	source := ReferralLink
+	if coupon != "" {
+		code, source = coupon, ReferralCoupon
+	} else if existing != nil || code == "" {
+		return existing, nil
 	}
 	var document string
 	if strings.TrimSpace(in.Document) != "" {
@@ -141,59 +167,64 @@ func (s *AffiliateService) Attribute(ctx context.Context, actor security.Subject
 			return nil, validation.Errors{"document": {"is not a valid CPF or CNPJ"}}
 		}
 	}
-	referrer, err := Affiliates(s.db).Where("code", "=", code).First(ctx, g)
-	if err != nil {
-		return nil, err
+	column := "code"
+	if source == ReferralCoupon {
+		column = "coupon_code"
+	}
+	var referrer *Affiliate
+	if source == ReferralLink || codePattern.MatchString(code) {
+		if referrer, err = Affiliates(s.db).Where(column, "=", code).First(ctx, g); err != nil {
+			return nil, err
+		}
 	}
 	if referrer == nil || !referrer.IsActive() {
+		if source == ReferralCoupon {
+			return nil, ErrCouponNotFound
+		}
 		return nil, ErrNotFound
 	}
 	if _, err := security.Authorize(ctx, s.policy, actor, ReferralRecord, *referrer); err != nil {
 		return nil, err
 	}
+	if existing != nil && existing.AffiliateID == referrer.ID {
+		return existing, nil
+	}
 	if referrer.UserID == userID {
 		return nil, ErrSelfReferral
 	}
-
-	// Up the tree from the referrer: neither the user nor their document may
-	// already be in it, or one person would be paid on their own purchases
-	// and the tree would close on itself.
-	current := referrer
-	for depth := 0; current != nil && depth < maxTreeWalk; depth++ {
-		if current.UserID == userID || (document != "" && current.Document == document) {
-			return nil, ErrSameTree
-		}
-		above, err := Referrals(s.db).Where("user_id", "=", current.UserID).First(ctx, g)
+	if source == ReferralCoupon {
+		paid, err := Conversions(s.db).Where("buyer_user_id", "=", userID).Count(ctx, g)
 		if err != nil {
 			return nil, err
 		}
-		if above == nil {
-			break
+		if paid > 0 {
+			return nil, ErrCouponTooLate
 		}
-		if document != "" && string(above.Document) == document {
-			return nil, ErrSameTree
-		}
-		if current, err = Affiliates(s.db).WhereKey(above.AffiliateID).First(ctx, g); err != nil {
-			return nil, err
-		}
+	}
+	if err := s.guardTree(ctx, g, referrer, userID, document); err != nil {
+		return nil, err
 	}
 
-	referral, err := Referrals(s.db).New()
-	if err != nil {
-		return nil, err
-	}
-	if referral.ID, err = data.NewID(); err != nil {
-		return nil, err
-	}
 	now := s.now()
-	referral.TenantID, referral.UserID, referral.AffiliateID = data.Tenant(g), userID, referrer.ID
-	referral.Document, referral.Code = OptionalText(document), code
-	referral.CreatedAt, referral.UpdatedAt = now, now
+	referral := existing
+	if referral == nil {
+		if referral, err = Referrals(s.db).New(); err != nil {
+			return nil, err
+		}
+		if referral.ID, err = data.NewID(); err != nil {
+			return nil, err
+		}
+		referral.TenantID, referral.UserID, referral.CreatedAt = data.Tenant(g), userID, now
+	}
+	referral.AffiliateID, referral.Code, referral.Source, referral.UpdatedAt = referrer.ID, code, source, now
+	if document != "" && referral.Document == "" {
+		referral.Document = OptionalText(document)
+	}
 	if _, err := referral.Save(ctx, g); err != nil {
 		if errors.Is(err, database.ErrUniqueViolation) {
 			// Two sign-ups of one user at once: the one that won is the
 			// referral. A document already referred is refused.
-			if winner, ferr := Referrals(s.db).Where("user_id", "=", userID).First(ctx, g); ferr == nil && winner != nil {
+			if winner, ferr := Referrals(s.db).Where("user_id", "=", userID).First(ctx, g); ferr == nil && winner != nil && existing == nil {
 				return winner, nil
 			}
 			return nil, ErrDocumentReferred
@@ -201,6 +232,32 @@ func (s *AffiliateService) Attribute(ctx context.Context, actor security.Subject
 		return nil, err
 	}
 	return referral, nil
+}
+
+// guardTree walks up the tree from the referrer: neither the user nor their
+// document may already be in it, or one person would be paid on their own
+// purchases and the tree would close on itself.
+func (s *AffiliateService) guardTree(ctx context.Context, g security.Grant, referrer *Affiliate, userID, document string) error {
+	current := referrer
+	for depth := 0; current != nil && depth < maxTreeWalk; depth++ {
+		if current.UserID == userID || (document != "" && current.Document == document) {
+			return ErrSameTree
+		}
+		above, err := Referrals(s.db).Where("user_id", "=", current.UserID).First(ctx, g)
+		if err != nil {
+			return err
+		}
+		if above == nil {
+			break
+		}
+		if document != "" && string(above.Document) == document {
+			return ErrSameTree
+		}
+		if current, err = Affiliates(s.db).WhereKey(above.AffiliateID).First(ctx, g); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TreeNode is one person in an affiliate's tree.
