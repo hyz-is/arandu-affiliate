@@ -40,6 +40,7 @@ func commissionsTable(data CommissionsData) components.DataTableProps {
 			{Text: c.Rate},
 			{Text: c.Amount},
 			{HTML: components.Badge(components.BadgeProps{Label: c.Status, Variant: variant})},
+			{Text: c.ReleaseAt},
 			{Text: c.Reason},
 			{HTML: action},
 		}})
@@ -61,6 +62,7 @@ func commissionsTable(data CommissionsData) components.DataTableProps {
 			{Label: data.Labels.T("field.rate"), Key: "rate", Hideable: true},
 			{Label: data.Labels.T("field.amount"), Key: "amount", Sortable: true, Align: "right"},
 			{Label: data.Labels.T("field.status"), Key: "status", Sortable: true},
+			{Label: data.Labels.T("field.release_at"), Key: "release_at", Hideable: true},
 			{Label: data.Labels.T("field.reason"), Key: "reason", Hideable: true},
 			{Label: "", Key: "reverse"},
 		},

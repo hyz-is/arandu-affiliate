@@ -396,6 +396,23 @@ func (q *ReferralQuery) CursorPaginate(ctx context.Context, g auth.Grant, perPag
 	return ReferralCollectionOf(rows), meta, err
 }
 
+// ApplyListing narrows and orders the query as a listing state asks: the search,
+// the facets and the sort with its tie-break. Every column comes from the spec
+// the state was read with, never from the request.
+func (q *ReferralQuery) ApplyListing(state pagination.ListingState) *ReferralQuery {
+	q.b.ApplyListing(state)
+	return q
+}
+
+// Listing runs the query as a listing state asks and returns the rows of the
+// page beside the result a table is drawn from: the state, the page with its
+// total and the count of every facet value. Every statement it issues carries
+// the tenant of g.
+func (q *ReferralQuery) Listing(ctx context.Context, g auth.Grant, state pagination.ListingState, path string, columns ...any) (ReferralCollection, *pagination.ListingResult, error) {
+	rows, result, err := q.b.Listing(ctx, g, state, path, columns...)
+	return ReferralCollectionOf(rows), result, err
+}
+
 func (q *ReferralQuery) Chunk(ctx context.Context, g auth.Grant, count int, callback func(ReferralCollection, int) (bool, error)) error {
 	return q.b.Chunk(ctx, g, count, func(rows model.Rows, page int) (bool, error) {
 		return callback(ReferralCollectionOf(rows), page)

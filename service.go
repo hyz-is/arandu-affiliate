@@ -89,6 +89,9 @@ type CreateRequest struct {
 	Document string
 	// Code is the referral code. Empty draws one.
 	Code string
+	// CouponCode is the coupon a customer types at checkout to be referred by
+	// this affiliate, lowercased when stored. Empty gives the affiliate none.
+	CouponCode string
 }
 
 // Validate reports the errors per field.
@@ -104,6 +107,9 @@ func (r CreateRequest) Validate() validation.Errors {
 	if code := strings.ToLower(strings.TrimSpace(r.Code)); code != "" && !codePattern.MatchString(code) {
 		e.Add("code", "has to be 3 to 32 lowercase letters, digits or hyphens")
 	}
+	if coupon := strings.ToLower(strings.TrimSpace(r.CouponCode)); coupon != "" && !codePattern.MatchString(coupon) {
+		e.Add("coupon", "has to be 3 to 32 letters, digits or hyphens")
+	}
 	return e
 }
 
@@ -112,6 +118,9 @@ var _ validation.Validatable = CreateRequest{}
 // ErrTaken is a user, a document or a code that already belongs to an
 // affiliate of the tenant.
 var ErrTaken = validation.Errors{"code": {"the user, the document or the code is already an affiliate's"}}
+
+// ErrCouponTaken is a coupon that already belongs to an affiliate of the tenant.
+var ErrCouponTaken = validation.Errors{"coupon": {"this coupon already belongs to an affiliate"}}
 
 // Create registers an affiliate.
 func (s *AffiliateService) Create(ctx context.Context, actor security.Subject, in CreateRequest) (*Affiliate, error) {
@@ -130,6 +139,7 @@ func (s *AffiliateService) Create(ctx context.Context, actor security.Subject, i
 	proposed := Affiliate{
 		UserID: strings.TrimSpace(in.UserID), Name: strings.TrimSpace(in.Name),
 		Document: document, Code: code, Status: AffiliateActive,
+		CouponCode: OptionalText(strings.ToLower(strings.TrimSpace(in.CouponCode))),
 	}
 	g, err := security.Authorize(ctx, s.policy, actor, AffiliatesManage, proposed)
 	if err != nil {
@@ -146,6 +156,7 @@ func (s *AffiliateService) Create(ctx context.Context, actor security.Subject, i
 	candidate.TenantID = data.Tenant(g)
 	candidate.UserID, candidate.Name = proposed.UserID, proposed.Name
 	candidate.Document, candidate.Code, candidate.Status = proposed.Document, proposed.Code, proposed.Status
+	candidate.CouponCode = proposed.CouponCode
 	candidate.CreatedBy, candidate.CreatedAt, candidate.UpdatedAt = actor.ID, now, now
 	if _, err := candidate.Save(ctx, g); err != nil {
 		if errors.Is(err, database.ErrUniqueViolation) {
@@ -154,6 +165,39 @@ func (s *AffiliateService) Create(ctx context.Context, actor security.Subject, i
 		return nil, err
 	}
 	return candidate, nil
+}
+
+// SetCoupon gives an affiliate a coupon, replaces it, or removes it with an
+// empty one. A coupon is unique in the tenant, compared without regard to
+// case, and a customer who types it at checkout is referred by its owner
+// (Attribute). Changing it never touches the users already referred.
+func (s *AffiliateService) SetCoupon(ctx context.Context, actor security.Subject, id, coupon string) (*Affiliate, error) {
+	coupon = strings.ToLower(strings.TrimSpace(coupon))
+	if coupon != "" && !codePattern.MatchString(coupon) {
+		return nil, validation.Errors{"coupon": {"has to be 3 to 32 letters, digits or hyphens"}}
+	}
+	g, err := security.Authorize(ctx, s.policy, actor, AffiliatesManage, Affiliate{})
+	if err != nil {
+		return nil, err
+	}
+	record, err := Affiliates(s.db).WhereKey(id).First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, AffiliatesManage, *record); err != nil {
+		return nil, err
+	}
+	record.CouponCode, record.UpdatedAt = OptionalText(coupon), s.now()
+	if _, err := record.Save(ctx, g); err != nil {
+		if errors.Is(err, database.ErrUniqueViolation) {
+			return nil, ErrCouponTaken
+		}
+		return nil, err
+	}
+	return record, nil
 }
 
 // SetBlocked blocks an affiliate, or unblocks one. A blocked affiliate earns

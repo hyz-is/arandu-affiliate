@@ -24,6 +24,7 @@ func affiliatesTable(data AffiliatesData) components.DataTableProps {
 		rows = append(rows, components.TableRow{Key: a.ID, Cells: []components.TableCell{
 			{HTML: components.Link(components.LinkProps{Label: a.Name, URL: a.URL, Variant: "hover"})},
 			{Text: a.Code},
+			{Text: a.Coupon},
 			{Text: a.Document},
 			{Text: a.User},
 			{HTML: components.Badge(components.BadgeProps{Label: a.Status, Variant: variant})},
@@ -39,6 +40,7 @@ func affiliatesTable(data AffiliatesData) components.DataTableProps {
 		Columns: []components.TableColumn{
 			{Label: data.Labels.T("field.name"), Key: "name", Sortable: true},
 			{Label: data.Labels.T("field.code"), Key: "code", Sortable: true},
+			{Label: data.Labels.T("field.coupon"), Key: "coupon", Hideable: true},
 			{Label: data.Labels.T("field.document"), Key: "document", Hideable: true},
 			{Label: data.Labels.T("field.user"), Key: "user", Hideable: true},
 			{Label: data.Labels.T("field.status"), Key: "status", Sortable: true},
@@ -71,6 +73,7 @@ func affiliatesTable(data AffiliatesData) components.DataTableProps {
 			{!! components.Field(components.FieldProps{Name: "document", Label: .Labels.T("field.document"), Required: true, Page: .Form()}) !!}
 			{!! components.Field(components.FieldProps{Name: "user_id", Label: .Labels.T("field.user"), Required: true, Page: .Form()}) !!}
 			{!! components.Field(components.FieldProps{Name: "code", Label: .Labels.T("field.code"), Hint: .Labels.T("screen.code_hint"), Page: .Form()}) !!}
+			{!! components.Field(components.FieldProps{Name: "coupon", Label: .Labels.T("field.coupon"), Page: .Form()}) !!}
 			<div>{!! components.Button(components.ButtonProps{Label: .Labels.T("control.save"), Type: "submit"}) !!}</div>
 		</form>
 	</div>

@@ -211,6 +211,10 @@ type PlanRow struct {
 	CookieDays                                              int
 	Levels                                                  []LevelRow
 	Active                                                  bool
+	// Duration is the plan's limit on how long a buyer pays commission, and
+	// AnnualBase, Grace and PriorPayer the other rules, each already worded
+	// for the reader, "—" when the rule is off.
+	Duration, AnnualBase, Grace, PriorPayer string
 }
 
 // CommissionRow is one commission as a screen shows it.
@@ -218,8 +222,11 @@ type CommissionRow struct {
 	ID, Date, Rate, Amount, AmountSort, Status, StatusKey string
 	Order, Buyer, Product, Affiliate, AffiliateURL        string
 	Reason, ReverseURL                                    string
-	Level                                                 int
-	Reversible                                            bool
+	// ReleaseAt is when a pending commission reaches the wallet, "—" for one
+	// that was deposited at once.
+	ReleaseAt  string
+	Level      int
+	Reversible bool
 }
 
 // AccountOption is one payout account a withdrawal can be paid into.
@@ -248,21 +255,26 @@ type TableState struct {
 // DashboardPageData is the affiliate's own panel.
 type DashboardPageData struct {
 	Screen
-	Name, Code, Link, Document string
-	Blocked                    bool
-	Plan                       *PlanRow
-	From, To                   string
-	Clicks, Signups, Sales     int64
-	Commissions                string
-	Balance, Held, Available   string
-	Negative                   bool
-	Min, Max                   string
-	Rows                       []CommissionRow
-	Level, Status              string
-	Table                      TableState
-	Accounts                   []AccountOption
-	Withdrawals                []WithdrawalRow
-	WithdrawURL, AccountURL    string
+	Name, Code, Coupon, Link, Document string
+	Blocked                            bool
+	Plan                               *PlanRow
+	From, To                           string
+	Clicks, Signups, Sales             int64
+	Commissions                        string
+	Balance, Held, Available           string
+	Negative                           bool
+	// Pending is what the affiliate earned and is waiting out the plan's grace
+	// period, PendingCommissions the part of it earned in the period, and
+	// HasPending whether there is any to show.
+	Pending, PendingCommissions string
+	HasPending                  bool
+	Min, Max                    string
+	Rows                        []CommissionRow
+	Level, Status               string
+	Table                       TableState
+	Accounts                    []AccountOption
+	Withdrawals                 []WithdrawalRow
+	WithdrawURL, AccountURL     string
 }
 
 // AdminPlansPageData is the plans, for the admin.
@@ -274,8 +286,8 @@ type AdminPlansPageData struct {
 
 // AffiliateRow is one affiliate in the admin's list.
 type AffiliateRow struct {
-	ID, Name, Code, Document, User, Status, StatusKey, Created, URL string
-	Active                                                          bool
+	ID, Name, Code, Coupon, Document, User, Status, StatusKey, Created, URL string
+	Active                                                                  bool
 }
 
 // AdminAffiliatesPageData is the admin's list of affiliates.
@@ -298,12 +310,13 @@ type AdminAffiliatePageData struct {
 	Screen
 	Affiliate                             AffiliateRow
 	Link                                  string
-	Balance, Held, Available              string
+	Balance, Held, Available, Pending     string
 	Negative                              bool
 	Clicks, Signups, Sales                int64
 	Commissions                           string
 	Tree                                  []TreeRow
 	BlockURL, WriteOffURL, CommissionsURL string
+	CouponURL                             string
 }
 
 // AdminCommissionsPageData is every commission, for the admin.

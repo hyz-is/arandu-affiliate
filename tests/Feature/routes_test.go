@@ -164,6 +164,7 @@ var everyRoute = []struct {
 	{http.MethodGet, affiliate.DefaultPrefix + "/admin/affiliates/record-1", "", false},
 	{http.MethodPost, affiliate.DefaultPrefix + "/admin/affiliates/record-1/block", "", false},
 	{http.MethodDelete, affiliate.DefaultPrefix + "/admin/affiliates/record-1/block", "", false},
+	{http.MethodPost, affiliate.DefaultPrefix + "/admin/affiliates/record-1/coupon", "coupon=ana10", false},
 	{http.MethodPost, affiliate.DefaultPrefix + "/admin/affiliates/record-1/write-off", "reason=acordo", false},
 	{http.MethodGet, affiliate.DefaultPrefix + "/admin/commissions", "", true},
 	{http.MethodPost, affiliate.DefaultPrefix + "/admin/commissions/record-1/reversal", "reason=fraude", false},

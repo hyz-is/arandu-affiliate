@@ -30,12 +30,27 @@ type Referral struct {
 	// twice under two accounts.
 	Document OptionalText `db:"document"`
 
-	// Code is the code the user signed up with.
+	// Code is the code the user signed up with: the referral code of the
+	// link, or the coupon typed at checkout when Source says so.
 	Code string `db:"code"`
+
+	// Source is how the user was referred: ReferralLink or ReferralCoupon.
+	Source ReferralSource `db:"source"`
 
 	CreatedAt time.Time `db:"created_at"`
 	UpdatedAt time.Time `db:"updated_at"`
 }
+
+// ReferralSource is how a user was linked to their referrer.
+type ReferralSource string
+
+const (
+	// ReferralLink is a referral link, carried by the cookie to the sign-up.
+	ReferralLink ReferralSource = "link"
+	// ReferralCoupon is the affiliate's coupon, typed by the customer before
+	// their first payment.
+	ReferralCoupon ReferralSource = "coupon"
+)
 
 var referralTable = model.NewTable(model.TableSpec{
 	Name:      referralsTable,

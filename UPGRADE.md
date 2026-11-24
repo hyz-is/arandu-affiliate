@@ -1,6 +1,55 @@
 # Upgrade Guide
 
-## Unreleased
+## v0.4.0
+
+### The commercial rules of a plan
+
+Nothing is removed or renamed, and every default keeps the behaviour of v0.3.1.
+Run `aru migrate`: five additive migrations add columns with neutral defaults
+(`20261124_0009` to `20261124_0013`), and a plan, a conversion, a commission or a
+referral written before them reads as a plan with no rule, a payment that paid
+its commissions, a commission deposited at once and a referral made by link.
+
+What an application that wants the rules does:
+
+- Define the plan with `PlanRequest.MaxMonths`, `MaxPayments`, `AnnualBaseBps`,
+  `GraceDays` and `PriorPayerMonths`; zero is off. The admin form has the fields.
+- Report `ConversionRequest.Annual` for a long-period payment, and
+  `BuyerDocument` and `PriorPayer` for the prior-payer rule.
+- Call `Service().ReleaseDue(ctx, operator, time.Now())` from a daily job when a
+  plan sets `GraceDays`. Without it a pending commission is never deposited.
+- Pass `AttributeRequest.Coupon` at checkout. It prevails over `Code`, and is
+  refused with `ErrCouponTooLate` once the user has a payment on record.
+
+Three things read differently under the new code, only for a plan that uses a rule:
+
+- A `Commission` can now be `CommissionPending` or `CommissionCancelled`, besides
+  `available` and `reversed`. Code that switched on the status handles two more.
+- A conversion that pays nothing because of a rule is `counted`, with
+  `SkippedReason` set, and counts as a sale in `Stats.Sales`.
+- `RecordRefund` and `ReverseCommission` also take the commissions that are
+  pending, cancelling them.
+
+The views change: the plan page and the affiliate's pages gain fields, columns and
+two cards. A project that published them republishes:
+
+```sh
+aru vendor:publish --tag=view
+aru vendor:publish --tag=view --apply
+aru view:build
+```
+
+The catalogue gains the groups `unit` and the keys `field.coupon`,
+`field.max_months`, `field.max_payments`, `field.annual_base`,
+`field.annual_base_short`, `field.grace_days`, `field.grace`,
+`field.prior_payer_months`, `field.prior_payer`, `field.duration`, `field.pending`,
+`field.release_at`, `status.pending`, `status.cancelled`, `control.save_coupon` and
+`screen.rules_title`, `rules_hint`, `coupon_title`, `coupon_lead`, `coupon_none`,
+`coupon_admin_title`, `coupon_admin_lead`, `pending_title` and `pending_lead`, in
+`en` and `pt-BR`. A line an application leaves out says the English.
+
+The installed `aru` regenerates the queries with `ApplyListing` and `Listing`, so a
+project that checks them in sees those two methods appear on each query.
 
 ### The lists are drawn as Kyse's data table now draws them
 

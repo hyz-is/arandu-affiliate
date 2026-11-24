@@ -41,6 +41,7 @@ func commissionsTable(data DashboardData) components.DataTableProps {
 			{Text: c.Rate},
 			{Text: c.Amount},
 			{HTML: status},
+			{Text: c.ReleaseAt},
 			{Text: c.Reason},
 		}})
 	}
@@ -59,6 +60,7 @@ func commissionsTable(data DashboardData) components.DataTableProps {
 			{Label: data.Labels.T("field.rate"), Key: "rate", Hideable: true},
 			{Label: data.Labels.T("field.amount"), Key: "amount", Sortable: true, Align: "right"},
 			{Label: data.Labels.T("field.status"), Key: "status", Sortable: true},
+			{Label: data.Labels.T("field.release_at"), Key: "release_at", Hideable: true},
 			{Label: data.Labels.T("field.reason"), Key: "reason", Hideable: true},
 		},
 		Rows:  rows,
@@ -131,6 +133,10 @@ func accountOptions(data DashboardData) []components.SelectOption {
 				Label: .Labels.T("control.copy"), CopiedLabel: .Labels.T("control.copied"), Variant: "outline", Size: "sm",
 			}) !!}
 		</div>
+		@if(.Coupon != "")
+			<p class="text-sm"><span class="text-muted-foreground">{{ .Labels.T("screen.coupon_title") }}:</span> <code class="bg-muted rounded-md px-2 py-1 font-mono text-sm">{{ .Coupon }}</code></p>
+			<p class="text-muted-foreground text-xs">{{ .Labels.T("screen.coupon_lead") }}</p>
+		@endif
 	</div>
 
 	<form class="mt-8 flex flex-wrap items-end gap-3" method="get" action="{{ .Table.URL }}">
@@ -153,7 +159,13 @@ func accountOptions(data DashboardData) []components.SelectOption {
 				<div class="flex justify-between"><dt class="text-muted-foreground">{{ .Labels.T("field.available") }}</dt><dd class="text-lg font-semibold tabular-nums">{{ .Available }}</dd></div>
 				<div class="flex justify-between"><dt class="text-muted-foreground">{{ .Labels.T("field.held") }}</dt><dd class="tabular-nums">{{ .Held }}</dd></div>
 				<div class="flex justify-between"><dt class="text-muted-foreground">{{ .Labels.T("field.balance") }}</dt><dd class="tabular-nums">{{ .Balance }}</dd></div>
+				@if(.HasPending)
+					<div class="flex justify-between"><dt class="text-muted-foreground">{{ .Labels.T("field.pending") }}</dt><dd class="tabular-nums">{{ .Pending }}</dd></div>
+				@endif
 			</dl>
+			@if(.HasPending)
+				<p class="text-muted-foreground text-xs">{{ .Labels.T("screen.pending_lead") }}</p>
+			@endif
 			@if(.Negative)
 				<p class="text-destructive text-sm">{{ .Labels.T("screen.negative_balance") }}</p>
 			@endif
