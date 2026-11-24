@@ -37,6 +37,11 @@ type Affiliate struct {
 	// Name is how the affiliate is called on the screens and on a payout.
 	Name string `db:"name"`
 
+	// CouponCode is the coupon a customer types at checkout to be referred by
+	// this affiliate, unique per tenant, lowercase. Empty when the affiliate
+	// has none.
+	CouponCode OptionalText `db:"coupon_code"`
+
 	// Status is whether the affiliate earns and withdraws. A blocked
 	// affiliate keeps their history and their place in the tree; their level
 	// is skipped when a commission is paid, and the levels above them still

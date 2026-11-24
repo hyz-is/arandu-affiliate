@@ -28,9 +28,42 @@ type Plan struct {
 
 	Active Flag `db:"active"`
 
+	// MaxMonths and MaxPayments end the commission of a referred buyer: a
+	// payment made MaxMonths calendar months after the buyer's first
+	// commissionable payment, or after MaxPayments commissioned payments, is
+	// recorded and pays nothing. Zero is no limit.
+	MaxMonths   int `db:"max_months"`
+	MaxPayments int `db:"max_payments"`
+
+	// AnnualBaseBps is the share of an annual payment the rates apply to, in
+	// basis points. 10000, the value of a plan that never set it, is the
+	// whole payment.
+	AnnualBaseBps int64 `db:"annual_base_bps"`
+
+	// GraceDays is how many days after the payment a commission stays
+	// pending before it reaches the wallet. Zero deposits it at once.
+	GraceDays int `db:"grace_days"`
+
+	// PriorPayerMonths is the look-back, in months, in which a buyer who had
+	// already paid earns the affiliate nothing. Zero turns the rule off.
+	PriorPayerMonths int `db:"prior_payer_months"`
+
 	CreatedBy string    `db:"created_by"`
 	CreatedAt time.Time `db:"created_at"`
 	UpdatedAt time.Time `db:"updated_at"`
+}
+
+// FullBaseBps is the whole payment, in basis points: the value of
+// Plan.AnnualBaseBps that changes nothing.
+const FullBaseBps = 10000
+
+// AnnualBase is the share of an annual payment the rates apply to, in basis
+// points, FullBaseBps for a plan that never set one.
+func (p Plan) AnnualBase() int64 {
+	if p.AnnualBaseBps <= 0 || p.AnnualBaseBps > FullBaseBps {
+		return FullBaseBps
+	}
+	return p.AnnualBaseBps
 }
 
 // PlanKind is how far up the tree a plan pays.

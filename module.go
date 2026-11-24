@@ -765,6 +765,8 @@ func (m *Module) Migrations() []foundation.Migration {
 	return []foundation.Migration{
 		createAffiliates{}, createReferrals{}, createPlans{}, createPlanLevels{},
 		createClicks{}, createConversions{}, createCommissions{}, createWithdrawalDays{},
+		addPlanCommercialRules{}, addConversionRuleColumns{}, addCommissionRelease{},
+		addAffiliateCoupon{}, addReferralSource{},
 	}
 }
 
@@ -777,6 +779,11 @@ var (
 	_ migrations.ReversibleMigration = createConversions{}
 	_ migrations.ReversibleMigration = createCommissions{}
 	_ migrations.ReversibleMigration = createWithdrawalDays{}
+	_ migrations.ReversibleMigration = addPlanCommercialRules{}
+	_ migrations.ReversibleMigration = addConversionRuleColumns{}
+	_ migrations.ReversibleMigration = addCommissionRelease{}
+	_ migrations.ReversibleMigration = addAffiliateCoupon{}
+	_ migrations.ReversibleMigration = addReferralSource{}
 )
 
 // createAffiliates is the affiliates.
@@ -1011,4 +1018,128 @@ func (createWithdrawalDays) Up(ctx context.Context, conn migrations.Connection) 
 // Down drops the table.
 func (createWithdrawalDays) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().DropIfExists(ctx, withdrawalDaysTable)
+}
+
+// addPlanCommercialRules gives a plan the rules of a commercial contract.
+type addPlanCommercialRules struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addPlanCommercialRules) GetName() string { return "20261124_0009_add_plan_commercial_rules" }
+
+// Up adds the duration limits, the share of an annual payment, the grace
+// period and the look-back for a buyer who already paid. Every default is the
+// value that changes nothing -- no limit, the whole payment, no grace, no
+// look-back -- so a plan written before this ran pays exactly as it did.
+func (addPlanCommercialRules) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, plansTable, func(table *schema.Blueprint) {
+		table.Integer("max_months").Default(0)
+		table.Integer("max_payments").Default(0)
+		table.BigInteger("annual_base_bps").Default(FullBaseBps)
+		table.Integer("grace_days").Default(0)
+		table.Integer("prior_payer_months").Default(0)
+	})
+}
+
+// Down drops the columns.
+func (addPlanCommercialRules) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, plansTable, func(table *schema.Blueprint) {
+		table.DropColumn("max_months", "max_payments", "annual_base_bps", "grace_days", "prior_payer_months")
+	})
+}
+
+// addConversionRuleColumns lets a payment say it is annual, whose document paid
+// it and why it paid nothing.
+type addConversionRuleColumns struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addConversionRuleColumns) GetName() string { return "20261124_0010_add_conversion_rule_columns" }
+
+// Up adds the columns and the indexes the history lookups of the rules use.
+// The defaults describe a payment that was an ordinary, undocumented one that
+// paid its commissions, which is what every earlier row is.
+func (addConversionRuleColumns) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, conversionsTable, func(table *schema.Blueprint) {
+		table.UnsignedSmallInteger("annual").Default(0)
+		table.String("buyer_document", maxDocumentLen).Default("")
+		table.String("skipped_reason", maxShortLen).Default("")
+		table.Index([]string{"tenant_id", "buyer_user_id", "occurred_at"}, "affiliate_conversions_buyer_idx")
+		table.Index([]string{"tenant_id", "buyer_document", "occurred_at"}, "affiliate_conversions_document_idx")
+	})
+}
+
+// Down drops the indexes and the columns.
+func (addConversionRuleColumns) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, conversionsTable, func(table *schema.Blueprint) {
+		table.DropIndex("affiliate_conversions_buyer_idx")
+		table.DropIndex("affiliate_conversions_document_idx")
+		table.DropColumn("annual", "buyer_document", "skipped_reason")
+	})
+}
+
+// addCommissionRelease lets a commission wait before it reaches the wallet.
+type addCommissionRelease struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addCommissionRelease) GetName() string { return "20261124_0011_add_commission_release" }
+
+// Up adds when a pending commission is released and the part of the payment
+// it was computed on. Both defaults mean "paid at once, on the whole
+// payment", which is every commission that existed.
+func (addCommissionRelease) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, commissionsTable, func(table *schema.Blueprint) {
+		table.BigInteger("base_amount").Default(0)
+		table.Timestamp("release_at").Nullable()
+		table.Index([]string{"tenant_id", "status", "release_at"}, "affiliate_commissions_release_idx")
+	})
+}
+
+// Down drops the index and the columns.
+func (addCommissionRelease) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, commissionsTable, func(table *schema.Blueprint) {
+		table.DropIndex("affiliate_commissions_release_idx")
+		table.DropColumn("base_amount", "release_at")
+	})
+}
+
+// addAffiliateCoupon gives an affiliate a coupon of their own.
+type addAffiliateCoupon struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addAffiliateCoupon) GetName() string { return "20261124_0012_add_affiliate_coupon" }
+
+// Up adds the coupon, NULL while the affiliate has none so the unique index
+// holds among the coupons that exist.
+func (addAffiliateCoupon) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, affiliatesTable, func(table *schema.Blueprint) {
+		table.String("coupon_code", maxCodeLen).Nullable()
+		table.Unique([]string{"tenant_id", "coupon_code"}, "affiliates_coupon_uq")
+	})
+}
+
+// Down drops the index and the column.
+func (addAffiliateCoupon) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, affiliatesTable, func(table *schema.Blueprint) {
+		table.DropUnique("affiliates_coupon_uq")
+		table.DropColumn("coupon_code")
+	})
+}
+
+// addReferralSource says how a user was referred.
+type addReferralSource struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addReferralSource) GetName() string { return "20261124_0013_add_referral_source" }
+
+// Up adds the source, "link" for every referral that existed.
+func (addReferralSource) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, referralsTable, func(table *schema.Blueprint) {
+		table.String("source", maxShortLen).Default(string(ReferralLink))
+	})
+}
+
+// Down drops the column.
+func (addReferralSource) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, referralsTable, func(table *schema.Blueprint) {
+		table.DropColumn("source")
+	})
 }
