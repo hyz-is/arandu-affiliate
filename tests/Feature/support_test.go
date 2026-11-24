@@ -32,11 +32,17 @@ type world struct {
 	module  *affiliate.Module
 	svc     *affiliate.AffiliateService
 	wallets *wallet.WalletService
+	// sessions is the store the module's guard reads.
+	sessions *security.SessionStore
 }
 
 // install opens a fresh SQLite database, applies arandu-wallet's migrations
 // and this package's, and builds both modules over it.
-func install(t *testing.T) world {
+func install(t *testing.T) world { return installWith(t, nil) }
+
+// installWith is install with the configuration adjusted by the test, for the
+// one that is about what an application passes in it.
+func installWith(t *testing.T, adjust func(*affiliate.Config)) world {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "affiliate.sqlite")
@@ -57,7 +63,11 @@ func install(t *testing.T) world {
 	if err != nil {
 		t.Fatalf("building arandu-wallet: %v", err)
 	}
-	module, err := affiliate.New(affiliate.Config{Tenant: tenant, Wallet: walletModule.Service()}, db, sessions)
+	cfg := affiliate.Config{Tenant: tenant, Wallet: walletModule.Service()}
+	if adjust != nil {
+		adjust(&cfg)
+	}
+	module, err := affiliate.New(cfg, db, sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
 	}
@@ -67,7 +77,7 @@ func install(t *testing.T) world {
 			t.Fatalf("applying %s: %v", migration.GetName(), err)
 		}
 	}
-	return world{db: db, module: module, svc: module.Service(), wallets: walletModule.Service()}
+	return world{db: db, module: module, svc: module.Service(), wallets: walletModule.Service(), sessions: sessions}
 }
 
 // admin is the finance team of the tenant: this package's admin, and

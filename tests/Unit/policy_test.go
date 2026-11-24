@@ -383,3 +383,62 @@ func testWallet(t testing.TB, db *data.DB) *wallet.WalletService {
 	}
 	return module.Service()
 }
+
+// platformTeam is a subject the application gave the admin as an action, through
+// arandu-permission, and no role at all.
+func platformTeam() security.Subject {
+	return security.Subject{ID: "user-7", Tenant: "acme", Actions: []security.Action{affiliate.AdminAction}, Verified: true}
+}
+
+func TestTheAdminHeldAsAnActionOpensWhatTheRoleOpens(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range []security.Action{affiliate.PlansManage, affiliate.AffiliatesManage, affiliate.DashboardView} {
+		if _, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, platformTeam(), action, affiliate.Affiliate{}); err != nil {
+			t.Errorf("the admin held as an action was refused %s: %v", action, err)
+		}
+	}
+	// The role keeps working, unchanged, for an application written before the action.
+	if !affiliate.IsAdmin(finance()) {
+		t.Error("the role no longer makes an admin")
+	}
+	if !affiliate.IsAdmin(platformTeam()) {
+		t.Error("the action does not make an admin")
+	}
+}
+
+func TestTheActionIsNotAdminForGuestsOtherTenantsOrAnotherPackagesAction(t *testing.T) {
+	t.Parallel()
+
+	guest := security.Guest("acme")
+	guest.Actions = []security.Action{affiliate.AdminAction}
+	if affiliate.IsAdmin(guest) {
+		t.Error("a guest is an admin")
+	}
+	other := security.Subject{ID: "user-8", Tenant: "acme", Actions: []security.Action{"billing.admin", "affiliate.dashboard.view"}, Verified: true}
+	if affiliate.IsAdmin(other) {
+		t.Error("another package's admin action, or the dashboard's, makes an admin")
+	}
+	// A row of another tenant stays closed, whatever the subject holds.
+	_, err := security.Authorize(context.Background(), affiliate.AffiliatePolicy{}, platformTeam(), affiliate.AffiliatesManage, row("a-9", "globex", "user-1"))
+	if !errors.Is(err, security.ErrForbidden) {
+		t.Errorf("the admin reached a row of another tenant: %v", err)
+	}
+}
+
+func TestAnAdminActingAsSomebodyElseIsNotAdminOnTheStrengthOfTheAction(t *testing.T) {
+	t.Parallel()
+
+	viewed := platformTeam()
+	by := security.Subject{ID: "operator", Tenant: "acme", Verified: true}
+	viewed.Impersonator = &by
+	if affiliate.IsAdmin(viewed) {
+		t.Error("an impersonated subject is an admin by the action")
+	}
+	// The role is unchanged by this release, impersonation included.
+	asRole := finance()
+	asRole.Impersonator = &by
+	if !affiliate.IsAdmin(asRole) {
+		t.Error("the role stopped making an admin while impersonated: that is a break of 0.4.0")
+	}
+}

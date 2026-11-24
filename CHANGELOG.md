@@ -10,6 +10,36 @@ a release is corrected by another release and never by moving a tag.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-24
+
+The program's admin held as an action, and the guards an application puts in
+front of the panels, so a platform whose permissions are administered by
+arandu-permission can run it. Compatible with 0.4.0: a Subject that holds
+`AdminRole` is admin exactly as before, and a `Config` that sets no guard
+registers the routes as before. Nothing to migrate.
+
+### Added
+
+- `AdminAction` (`affiliate.admin`): the admin held as an action, the way
+  arandu-billing and arandu-investor hold theirs. It opens what `AdminRole`
+  opens, and nothing more. It is held in a group of arandu-permission and read
+  by `IsAdmin`; the policy still answers the four actions of the program.
+- `IsAdmin(security.Subject)`: `AdminRole`, or `AdminAction` among the actions
+  the Subject carries. A guest is never an admin, and a Subject that acts as
+  somebody else through impersonation is not an admin on the strength of the
+  action alone, as in arandu-billing.
+- `Config.Middleware` and `Config.AdminMiddleware`: guards run after
+  `RequireAuth` on every signed-in route, and after those on the admin routes
+  only. They are where an application resolves a Subject's actions
+  (arandu-permission) or puts its operator console's guard. The referral link
+  stays outside both.
+
+### Changed
+
+- The policy and the commissions list ask `IsAdmin` where they asked
+  `HasRole(AdminRole)`. The answer is the same for every Subject that held the
+  role.
+
 ## [0.4.0] - 2026-11-24
 
 The commercial rules of a plan, for a contract that pays a commission for a

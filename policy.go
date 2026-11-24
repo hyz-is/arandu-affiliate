@@ -26,11 +26,29 @@ const (
 	// click on /r/{code}, and the referral of the user who signed up with it.
 	// The visitor has no session; the application's sign-up is the caller.
 	ReferralRecord security.Action = "affiliate.referrals.record"
+	// AdminAction is being this package's admin, held as an action: what an
+	// application whose permissions arandu-permission administers puts in a
+	// group. It opens what AdminRole opens, and nothing more. It is held, not
+	// asked: the policy answers the four actions above, and IsAdmin reads this
+	// one among the actions a Subject carries.
+	AdminAction security.Action = "affiliate.admin"
 )
 
 // AdminRole is the role that runs the program in its tenant. The application
 // gives it through arandu-permission, which fills the Subject's roles.
 const AdminRole = "affiliate.admin"
+
+// IsAdmin says whether the subject runs the program: it holds AdminRole, or
+// AdminAction among the actions arandu-permission resolved for it. A guest is
+// never an admin, and neither is a subject that acts as somebody else through
+// impersonation on the strength of an action alone: an admin acting inside
+// somebody's account acts as that account, as arandu-billing decides it.
+func IsAdmin(s security.Subject) bool {
+	if s.IsGuest() {
+		return false
+	}
+	return s.HasRole(AdminRole) || (!s.Impersonated() && s.Can(AdminAction))
+}
 
 // AffiliatePolicy is the only authority over who does what in the program.
 //
@@ -68,7 +86,7 @@ func (AffiliatePolicy) Can(ctx context.Context, s security.Subject, a security.A
 		return fmt.Errorf("a guest is no affiliate")
 	}
 
-	if s.HasRole(AdminRole) {
+	if IsAdmin(s) {
 		switch a {
 		case PlansManage, AffiliatesManage, DashboardView:
 			return nil

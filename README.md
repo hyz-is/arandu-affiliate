@@ -223,7 +223,7 @@ Roles reach the policy through the Subject, which
 
 | role | what it opens |
 | --- | --- |
-| `affiliate.admin` | plans, affiliates, the tree, blocking, commissions and their reversal, write-offs, the withdrawal queue, recording payments |
+| `affiliate.admin`, as a role or as the action `AdminAction` | plans, affiliates, the tree, blocking, commissions and their reversal, write-offs, the withdrawal queue, recording payments |
 | `wallet.operator` | arandu-wallet's operator actions; whoever records payments or pays withdrawals needs it too |
 
 An affiliate needs no role: the user whose `user_id` is on an affiliate's

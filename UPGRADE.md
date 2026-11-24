@@ -1,5 +1,22 @@
 # Upgrade Guide
 
+## v0.5.0
+
+### The admin held as an action, and guards in the config
+
+Nothing is removed or renamed, and no migration is needed. A Subject that holds
+`affiliate.admin` as a role is admin as in v0.4.0, and a `Config` with no guards
+registers the routes as before.
+
+What an application whose permissions are administered by arandu-permission does:
+
+- Put `affiliate.AdminAction` (`"affiliate.admin"`) in the group of the people
+  who run the program, and in the actions the application lists for its groups.
+- Pass the guard that resolves a Subject's actions in `Config.Middleware` (it
+  runs on every signed-in route), and the operator console's own guard, if any,
+  in `Config.AdminMiddleware` (admin routes only). Without a guard that resolves
+  the actions, the action is never on the request and the admin side answers 403.
+
 ## v0.4.0
 
 ### The commercial rules of a plan

@@ -627,7 +627,7 @@ func (s *AffiliateService) CommissionsPage(ctx context.Context, actor security.S
 	if err != nil {
 		return nil, 0, err
 	}
-	if !actor.HasRole(AdminRole) {
+	if !IsAdmin(actor) {
 		me, err := Affiliates(s.db).Where("user_id", "=", actor.ID).First(ctx, g)
 		if err != nil {
 			return nil, 0, err

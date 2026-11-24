@@ -78,6 +78,15 @@ type Config struct {
 	// balance of its own.
 	Wallet *wallet.WalletService
 
+	// Middleware runs on every route of the signed-in panels, the affiliate's own
+	// and the admin's, after RequireAuth; AdminMiddleware runs after it on the
+	// admin's routes only. They are where an application puts
+	// arandu-permission's resolution of a Subject's actions, and its operator
+	// console's own guard. A guard answers "is this request on the right side"
+	// and stops; the policy still decides. The referral link is outside both.
+	Middleware      []func(http.Handler) http.Handler
+	AdminMiddleware []func(http.Handler) http.Handler
+
 	// Translator is the application's own catalogue, asked before the one this
 	// package ships, key by key: "affiliate.screen.dashboard_title". Optional.
 	Translator *translation.Translator
@@ -106,6 +115,16 @@ func (c Config) Validate() error {
 	}
 	if c.Wallet == nil {
 		return fmt.Errorf("affiliate: Config.Wallet is nil: arandu-affiliate needs arandu-wallet installed and registered in bootstrap/app.go; pass walletModule.Service() here")
+	}
+	for i, mw := range c.Middleware {
+		if mw == nil {
+			return fmt.Errorf("affiliate: Config.Middleware[%d] is nil", i)
+		}
+	}
+	for i, mw := range c.AdminMiddleware {
+		if mw == nil {
+			return fmt.Errorf("affiliate: Config.AdminMiddleware[%d] is nil", i)
+		}
 	}
 	if c.PageSize < 0 || c.PageSize > MaxPageSize {
 		return fmt.Errorf("affiliate: Config.PageSize is %d, and has to be between 0 and %d, where 0 means %d", c.PageSize, MaxPageSize, DefaultPageSize)

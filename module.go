@@ -114,7 +114,11 @@ const adminSegment = "/admin"
 // which is mounted before the first registration.
 func (m *Module) Routes(r *fhttp.Router) {
 	public := r
-	r = r.Group("", middleware.RequireAuth(m.sessions))
+	guards := []fhttp.Middleware{middleware.RequireAuth(m.sessions)}
+	for _, mw := range m.cfg.Middleware {
+		guards = append(guards, mw)
+	}
+	r = r.Group("", guards...)
 
 	public.Action(stdhttp.MethodGet, m.cfg.ReferralPath+"/{code}", m.referral).Name("affiliate.referral")
 
@@ -125,8 +129,14 @@ func (m *Module) Routes(r *fhttp.Router) {
 	r.Action(stdhttp.MethodPost, p+"/me/withdrawals", m.storeWithdrawal).Name("affiliate.me.withdrawals.store")
 	r.Action(stdhttp.MethodGet, p+"/withdrawals/{id}/receipt", m.receipt).Name("affiliate.withdrawals.receipt")
 
-	// The admin's side. The policy decides who reaches it.
+	// The admin's side. The policy decides who reaches it; AdminMiddleware is
+	// the application's own guard in front of the policy, on these routes only.
 	admin := p + adminSegment
+	adminGuards := make([]fhttp.Middleware, 0, len(m.cfg.AdminMiddleware))
+	for _, mw := range m.cfg.AdminMiddleware {
+		adminGuards = append(adminGuards, mw)
+	}
+	r = r.Group("", adminGuards...)
 	r.Action(stdhttp.MethodGet, admin+"/plans", m.plans).Name("affiliate.admin.plans.index")
 	r.Action(stdhttp.MethodPost, admin+"/plans", m.storePlan).Name("affiliate.admin.plans.store")
 	r.Action(stdhttp.MethodPost, admin+"/plans/{id}/activation", m.activatePlan).Name("affiliate.admin.plans.activate")
