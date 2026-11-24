@@ -34,8 +34,19 @@ type ConversionRequest struct {
 	// Amount is the payment in centavos.
 	Amount int64
 	// Renewal is a payment of something the buyer already had. It pays
-	// commissions like a first purchase: they are for life.
-	Renewal    bool
+	// commissions like a first purchase, until the plan's limits end them.
+	Renewal bool
+	// Annual marks a payment that covers a long period. A plan with an
+	// AnnualBaseBps below FullBaseBps pays its rates on that share of it.
+	Annual bool
+	// BuyerDocument is the buyer's CPF or CNPJ, when the application has it.
+	// It lets the plan's look-back for a buyer who already paid find a payment
+	// made under another login of the same person.
+	BuyerDocument string
+	// PriorPayer is the application telling the module that the buyer had
+	// already paid within the look-back, for the payments the module cannot
+	// see. It is read only while the plan's PriorPayerMonths is above zero.
+	PriorPayer bool
 	OccurredAt time.Time
 }
 
@@ -49,6 +60,11 @@ func (r ConversionRequest) Validate() validation.Errors {
 	validation.MaxLen(e, "product_id", r.ProductID, maxIdentifierLen)
 	if r.Amount <= 0 {
 		e.Add("amount", "is a payment above zero, in centavos")
+	}
+	if strings.TrimSpace(r.BuyerDocument) != "" {
+		if _, err := normalizeDocument(r.BuyerDocument); err != nil {
+			e.Add("buyer_document", "is not a valid CPF or CNPJ")
+		}
 	}
 	if r.OccurredAt.IsZero() {
 		e.Add("occurred_at", "is required")
@@ -80,8 +96,18 @@ func CommissionOf(amount, rateBps int64) int64 { return roundDiv(amount*rateBps,
 // RecordConversion records a payment of a user and pays every level of the
 // tree above them, by the plan active now: the buyer's referrer is level one,
 // the referrer's referrer level two, and so on. A blocked affiliate's level
-// is skipped and the levels above still earn. Each commission is deposited in
-// the affiliate's wallet at once.
+// is skipped and the levels above still earn.
+//
+// The plan's rules shape what is paid. An annual payment (Annual) is paid on
+// the plan's share of its value; a payment past the plan's MaxMonths or
+// MaxPayments, counted from the buyer's first referred payment, or by a buyer
+// who had already paid within PriorPayerMonths, is recorded with the reason in
+// SkippedReason and pays nothing, so the history stays whole. Each commission
+// is deposited in the affiliate's wallet at once, or, under a plan with
+// GraceDays, kept pending until ReleaseDue deposits it.
+//
+// A free trial is no payment: the application does not call this until money
+// moves.
 //
 // It is idempotent by OrderRef: a payment reported again answers what the
 // first report recorded. A buyer with no referrer, or a payment with no plan
@@ -95,6 +121,10 @@ func (s *AffiliateService) RecordConversion(ctx context.Context, actor security.
 		return nil, nil, err
 	}
 	ref := strings.TrimSpace(in.OrderRef)
+	document := ""
+	if strings.TrimSpace(in.BuyerDocument) != "" {
+		document, _ = normalizeDocument(in.BuyerDocument)
+	}
 	if existing, err := Conversions(s.db).Where("order_ref", "=", ref).First(ctx, g); err != nil || existing != nil {
 		if err != nil {
 			return nil, nil, err
@@ -118,6 +148,7 @@ func (s *AffiliateService) RecordConversion(ctx context.Context, actor security.
 	conversion.TenantID, conversion.OrderRef = data.Tenant(g), ref
 	conversion.BuyerUserID, conversion.ProductID = strings.TrimSpace(in.BuyerUserID), strings.TrimSpace(in.ProductID)
 	conversion.Amount, conversion.Renewal = in.Amount, Flag(in.Renewal)
+	conversion.Annual, conversion.BuyerDocument = Flag(in.Annual), document
 	conversion.Status, conversion.OccurredAt = ConversionCounted, in.OccurredAt.UTC()
 	conversion.CreatedAt, conversion.UpdatedAt = now, now
 	if plan != nil {
@@ -157,13 +188,31 @@ func (s *AffiliateService) RecordConversion(ctx context.Context, actor security.
 		}
 	}
 
+	// What the plan's rules leave of the payment.
+	base := conversion.Amount
+	var graceDays int
+	if plan != nil {
+		if conversion.AffiliateID != "" {
+			if conversion.SkippedReason, err = s.skipReason(ctx, g, plan.Plan, conversion, in.PriorPayer); err != nil {
+				return nil, nil, err
+			}
+			if conversion.SkippedReason != SkipNone {
+				earners = nil
+			}
+		}
+		if conversion.Annual {
+			base = roundDiv(conversion.Amount*plan.Plan.AnnualBase(), FullBaseBps)
+		}
+		graceDays = plan.Plan.GraceDays
+	}
+
 	var paid []*Commission
 	err = database.Transaction(ctx, s.db, func(ctx context.Context) error {
 		if _, err := conversion.Save(ctx, g); err != nil {
 			return err
 		}
 		for _, e := range earners {
-			amount := CommissionOf(conversion.Amount, e.rate)
+			amount := CommissionOf(base, e.rate)
 			if amount <= 0 {
 				continue
 			}
@@ -175,14 +224,20 @@ func (s *AffiliateService) RecordConversion(ctx context.Context, actor security.
 				return err
 			}
 			c.TenantID, c.ConversionID, c.AffiliateID = data.Tenant(g), conversion.ID, e.affiliate.ID
-			c.Level, c.RateBps, c.Amount, c.Status = e.level, e.rate, amount, CommissionAvailable
+			c.Level, c.RateBps, c.Amount, c.BaseAmount, c.Status = e.level, e.rate, amount, base, CommissionAvailable
 			c.CreatedAt, c.UpdatedAt = now, now
-			receipt, err := s.deposit(ctx, actor, e.affiliate, "affiliate:commission:"+c.ID, amount,
-				wallet.Meta{"commission": c.ID, "order": ref, "level": strconv.Itoa(e.level)})
-			if err != nil {
-				return err
+			if graceDays > 0 {
+				release := conversion.OccurredAt.AddDate(0, 0, graceDays)
+				c.ReleaseAt = &release
+				if release.After(now) {
+					c.Status = CommissionPending
+				}
 			}
-			c.WalletOperationID = receipt.Operation.ID
+			if c.Status == CommissionAvailable {
+				if err := s.depositCommission(ctx, actor, e.affiliate, c, ref); err != nil {
+					return err
+				}
+			}
 			if _, err := c.Save(ctx, g); err != nil {
 				return err
 			}
@@ -202,6 +257,87 @@ func (s *AffiliateService) RecordConversion(ctx context.Context, actor security.
 		return nil, nil, err
 	}
 	return conversion, paid, nil
+}
+
+// addMonths is the instant n calendar months from t, in t's zone, clamped to
+// the last day of a shorter month: January 31 plus one month is the last day of
+// February, not March 3.
+func addMonths(t time.Time, n int) time.Time {
+	y, m, d := t.Date()
+	first := time.Date(y, m+time.Month(n), 1, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+	last := time.Date(first.Year(), first.Month()+1, 0, 0, 0, 0, 0, t.Location()).Day()
+	return time.Date(first.Year(), first.Month(), min(d, last), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+}
+
+// skipReason is why the plan's rules leave a referred payment with no
+// commission, SkipNone when they leave it commissionable. The payment is not
+// saved yet; the buyer's history is what the table already holds.
+//
+// The buyer's first referred payment, the earliest counted payment that
+// carried a referrer, starts the clock and is the only one the look-back for a
+// buyer who already paid is asked about: a buyer found to be a prior payer
+// there stays one, on every payment that follows.
+func (s *AffiliateService) skipReason(ctx context.Context, g security.Grant, plan Plan, c *Conversion, priorPayer bool) (SkipReason, error) {
+	referred := func() *ConversionQuery {
+		return Conversions(s.db).Where("buyer_user_id", "=", c.BuyerUserID).Where("affiliate_id", "!=", "").Where("status", "=", string(ConversionCounted))
+	}
+	first, err := referred().OrderBy("occurred_at").OrderBy("id").First(ctx, g)
+	if err != nil {
+		return SkipNone, err
+	}
+	starts := first == nil || c.OccurredAt.Before(first.OccurredAt)
+	start := c.OccurredAt
+	if !starts {
+		start = first.OccurredAt
+		if first.SkippedReason == SkipPriorPayer {
+			return SkipPriorPayer, nil
+		}
+	}
+	if starts && plan.PriorPayerMonths > 0 {
+		if priorPayer {
+			return SkipPriorPayer, nil
+		}
+		earlier, err := Conversions(s.db).Where("status", "=", string(ConversionCounted)).
+			Where("occurred_at", ">=", addMonths(c.OccurredAt, -plan.PriorPayerMonths)).Where("occurred_at", "<", c.OccurredAt).
+			Where(func(w *ConversionQuery) {
+				w.Where("buyer_user_id", "=", c.BuyerUserID)
+				if c.BuyerDocument != "" {
+					w.OrWhere("buyer_document", "=", c.BuyerDocument)
+				}
+			}).Count(ctx, g)
+		if err != nil {
+			return SkipNone, err
+		}
+		if earlier > 0 {
+			return SkipPriorPayer, nil
+		}
+	}
+	if plan.MaxMonths > 0 && !c.OccurredAt.Before(addMonths(start, plan.MaxMonths)) {
+		return SkipDurationLimit, nil
+	}
+	if plan.MaxPayments > 0 {
+		paid, err := referred().Where("skipped_reason", "=", string(SkipNone)).Count(ctx, g)
+		if err != nil {
+			return SkipNone, err
+		}
+		if paid >= int64(plan.MaxPayments) {
+			return SkipPaymentLimit, nil
+		}
+	}
+	return SkipNone, nil
+}
+
+// depositCommission puts a commission in its owner's wallet, once, and marks it
+// available. The key is the commission's, so a second attempt finds the first
+// deposit instead of making another.
+func (s *AffiliateService) depositCommission(ctx context.Context, actor security.Subject, owner *Affiliate, c *Commission, order string) error {
+	receipt, err := s.deposit(ctx, actor, owner, "affiliate:commission:"+c.ID, c.Amount,
+		wallet.Meta{"commission": c.ID, "order": order, "level": strconv.Itoa(c.Level)})
+	if err != nil {
+		return err
+	}
+	c.WalletOperationID, c.Status = receipt.Operation.ID, CommissionAvailable
+	return nil
 }
 
 // walletOf is the affiliate's wallet, opened the first time it is needed:
@@ -231,8 +367,9 @@ func (s *AffiliateService) deposit(ctx context.Context, actor security.Subject, 
 // RecordRefund records that a payment was given back, and reverses every
 // commission it paid. The money leaves each wallet whatever its balance: a
 // commission already withdrawn leaves the balance below zero, which blocks
-// withdrawals until later commissions, or the admin's write-off, cover it.
-// Refunding twice changes nothing.
+// withdrawals until later commissions, or the admin's write-off, cover it. A
+// commission still pending, inside the plan's grace period, is cancelled and
+// the wallet is never touched. Refunding twice changes nothing.
 func (s *AffiliateService) RecordRefund(ctx context.Context, actor security.Subject, orderRef, reason string) (*Conversion, error) {
 	g, err := security.Authorize(ctx, s.policy, actor, AffiliatesManage, Affiliate{})
 	if err != nil {
@@ -251,7 +388,8 @@ func (s *AffiliateService) RecordRefund(ctx context.Context, actor security.Subj
 	if strings.TrimSpace(reason) == "" {
 		reason = "reembolso do pedido " + conversion.OrderRef
 	}
-	paid, err := Commissions(s.db).Where("conversion_id", "=", conversion.ID).Where("status", "=", string(CommissionAvailable)).Get(ctx, g)
+	paid, err := Commissions(s.db).Where("conversion_id", "=", conversion.ID).
+		WhereIn("status", []any{string(CommissionAvailable), string(CommissionPending)}).Get(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +410,8 @@ func (s *AffiliateService) RecordRefund(ctx context.Context, actor security.Subj
 }
 
 // ReverseCommission takes one commission back, by the admin's hand, with the
-// reason the affiliate reads.
+// reason the affiliate reads. A pending commission is cancelled without
+// touching the wallet.
 func (s *AffiliateService) ReverseCommission(ctx context.Context, actor security.Subject, commissionID, reason string) (*Commission, error) {
 	if strings.TrimSpace(reason) == "" {
 		return nil, validation.Errors{"reason": {"is required"}}
@@ -288,7 +427,7 @@ func (s *AffiliateService) ReverseCommission(ctx context.Context, actor security
 	if c == nil {
 		return nil, ErrNotFound
 	}
-	if c.Status == CommissionReversed {
+	if c.Status == CommissionReversed || c.Status == CommissionCancelled {
 		return c, nil
 	}
 	err = database.Transaction(ctx, s.db, func(ctx context.Context) error {
@@ -301,8 +440,14 @@ func (s *AffiliateService) ReverseCommission(ctx context.Context, actor security
 }
 
 // reverse takes a commission out of its wallet, forced past the balance, and
-// marks it reversed, inside the caller's transaction.
+// marks it reversed, inside the caller's transaction. A pending commission
+// never reached the wallet: it is marked cancelled and nothing moves.
 func (s *AffiliateService) reverse(ctx context.Context, actor security.Subject, g security.Grant, c *Commission, reason string) error {
+	if c.Status == CommissionPending {
+		c.Status, c.ReversedReason, c.UpdatedAt = CommissionCancelled, truncate(reason, maxTextLen), s.now()
+		_, err := c.Save(ctx, g)
+		return err
+	}
 	owner, err := Affiliates(s.db).WhereKey(c.AffiliateID).First(ctx, g)
 	if err != nil {
 		return err
@@ -325,6 +470,85 @@ func (s *AffiliateService) reverse(ctx context.Context, actor security.Subject, 
 	c.UpdatedAt = s.now()
 	_, err = c.Save(ctx, g)
 	return err
+}
+
+// ReleaseDue deposits in the wallets every pending commission whose grace
+// period ended by now, and answers how many it released. The application
+// calls it from a job, daily or oftener; a commission released here is the
+// same one RecordConversion would have deposited at once under a plan with no
+// grace period, with the same wallet key, so running it twice, or two runs at
+// once, deposits each commission once. A commission whose payment was refunded
+// in the meantime is already cancelled and is not touched. An affiliate who was
+// blocked after earning still receives what they had earned; the block stops
+// the withdrawal. A commission that cannot be released is left pending for the
+// next run, and the errors of the ones that failed come back joined.
+func (s *AffiliateService) ReleaseDue(ctx context.Context, actor security.Subject, now time.Time) (int, error) {
+	g, err := security.Authorize(ctx, s.policy, actor, AffiliatesManage, Affiliate{})
+	if err != nil {
+		return 0, err
+	}
+	if now.IsZero() {
+		now = s.now()
+	}
+	now = now.UTC()
+	due, err := Commissions(s.db).Where("status", "=", string(CommissionPending)).Where("release_at", "<=", now).
+		OrderBy("release_at").OrderBy("id").Get(ctx, g)
+	if err != nil {
+		return 0, err
+	}
+	var released int
+	var failed []error
+	for _, c := range due {
+		ok, err := s.releaseOne(ctx, actor, g, c.ID, now)
+		if err != nil {
+			failed = append(failed, fmt.Errorf("commission %s: %w", c.ID, err))
+			continue
+		}
+		if ok {
+			released++
+		}
+	}
+	return released, errors.Join(failed...)
+}
+
+// releaseOne releases one commission in a transaction of its own, reading it
+// again inside it: a refund that cancelled it a moment ago wins.
+func (s *AffiliateService) releaseOne(ctx context.Context, actor security.Subject, g security.Grant, id string, now time.Time) (bool, error) {
+	released := false
+	err := database.Transaction(ctx, s.db, func(ctx context.Context) error {
+		c, err := Commissions(s.db).WhereKey(id).First(ctx, g)
+		if err != nil || c == nil || c.Status != CommissionPending || c.ReleaseAt == nil || c.ReleaseAt.After(now) {
+			return err
+		}
+		owner, err := Affiliates(s.db).WhereKey(c.AffiliateID).First(ctx, g)
+		if err != nil {
+			return err
+		}
+		if owner == nil {
+			return ErrNotFound
+		}
+		conversion, err := Conversions(s.db).WhereKey(c.ConversionID).First(ctx, g)
+		if err != nil {
+			return err
+		}
+		order := ""
+		if conversion != nil {
+			if conversion.Status == ConversionRefunded {
+				return nil
+			}
+			order = conversion.OrderRef
+		}
+		if err := s.depositCommission(ctx, actor, owner, c, order); err != nil {
+			return err
+		}
+		c.UpdatedAt = s.now()
+		if _, err := c.Save(ctx, g); err != nil {
+			return err
+		}
+		released = true
+		return nil
+	})
+	return released, err
 }
 
 func truncate(s string, n int) string {
@@ -498,11 +722,14 @@ func dayStart(d Day, loc *time.Location) time.Time {
 // Stats are an affiliate's numbers over a period.
 type Stats struct {
 	Clicks, Signups, Sales int64
-	Commissions            int64
+	// Commissions are the centavos released to the wallet, and Pending the
+	// centavos still in their grace period, among those earned in the period.
+	Commissions int64
+	Pending     int64
 }
 
 // StatsOf counts an affiliate's clicks, sign-ups and sales in [from, to],
-// and sums the commissions they earned in it.
+// and sums the commissions they earned in it, released and pending apart.
 func (s *AffiliateService) StatsOf(ctx context.Context, actor security.Subject, affiliateID string, from, to Day) (Stats, error) {
 	g, err := security.Authorize(ctx, s.policy, actor, DashboardView, Affiliate{})
 	if err != nil {
@@ -531,13 +758,18 @@ func (s *AffiliateService) StatsOf(ctx context.Context, actor security.Subject, 
 		Where("occurred_at", ">=", start).Where("occurred_at", "<", end).Count(ctx, g); err != nil {
 		return Stats{}, err
 	}
-	earned, err := Commissions(s.db).Where("affiliate_id", "=", owner.ID).Where("status", "=", string(CommissionAvailable)).
+	earned, err := Commissions(s.db).Where("affiliate_id", "=", owner.ID).
+		WhereIn("status", []any{string(CommissionAvailable), string(CommissionPending)}).
 		Where("created_at", ">=", start).Where("created_at", "<", end).Get(ctx, g)
 	if err != nil {
 		return Stats{}, err
 	}
 	for _, c := range earned {
-		st.Commissions += c.Amount
+		if c.Status == CommissionPending {
+			st.Pending += c.Amount
+		} else {
+			st.Commissions += c.Amount
+		}
 	}
 	return st, nil
 }

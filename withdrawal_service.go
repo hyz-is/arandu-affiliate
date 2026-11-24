@@ -35,6 +35,9 @@ type Balance struct {
 	Held int64
 	// Available is what can be asked for now.
 	Available int64
+	// Pending is what the affiliate has earned and is still in its grace
+	// period: it is not in the wallet and cannot be withdrawn yet.
+	Pending int64
 }
 
 // balanceOf reads the affiliate's wallet; an affiliate who never earned has
@@ -71,7 +74,17 @@ func (s *AffiliateService) BalanceOf(ctx context.Context, actor security.Subject
 		return Balance{}, err
 	}
 	b, _, err := s.balanceOf(ctx, actor, owner)
-	return b, err
+	if err != nil {
+		return b, err
+	}
+	pending, err := Commissions(s.db).Where("affiliate_id", "=", owner.ID).Where("status", "=", string(CommissionPending)).Get(ctx, g)
+	if err != nil {
+		return b, err
+	}
+	for _, c := range pending {
+		b.Pending += c.Amount
+	}
+	return b, nil
 }
 
 // PayoutKinds are the kinds of account an affiliate can be paid into, and

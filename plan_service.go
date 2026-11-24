@@ -25,7 +25,36 @@ type PlanRequest struct {
 	// MinWithdrawal and MaxWithdrawal are centavos; a max of zero is no max.
 	MinWithdrawal int64
 	MaxWithdrawal int64
+
+	// MaxMonths ends the commission of a buyer that many calendar months
+	// after their first commissionable payment: a later payment is recorded
+	// and pays nothing. Zero is no limit.
+	MaxMonths int
+	// MaxPayments ends it after that many commissioned payments. Zero is no
+	// limit. When both are set, whichever is reached first ends it.
+	MaxPayments int
+	// AnnualBaseBps is the share of an annual payment (ConversionRequest.Annual)
+	// the rates apply to, in basis points: 5000 pays on half of it. Zero and
+	// FullBaseBps both mean the whole payment.
+	AnnualBaseBps int64
+	// GraceDays is how many days after the payment a commission stays
+	// pending before ReleaseDue deposits it. Zero deposits it at once.
+	GraceDays int
+	// PriorPayerMonths is the look-back, in months, in which a buyer who had
+	// already paid earns the affiliate nothing. Zero turns the rule off.
+	PriorPayerMonths int
 }
+
+// Limits of the commercial rules a plan may set.
+const (
+	// MaxRuleMonths is the longest MaxMonths and PriorPayerMonths a plan may
+	// set: ten years.
+	MaxRuleMonths = 120
+	// MaxRulePayments is the largest MaxPayments a plan may set.
+	MaxRulePayments = 1200
+	// MaxGraceDays is the longest grace period a plan may set.
+	MaxGraceDays = 365
+)
 
 // Validate reports the errors per field.
 func (r PlanRequest) Validate() validation.Errors {
@@ -63,6 +92,21 @@ func (r PlanRequest) Validate() validation.Errors {
 	}
 	if r.MaxWithdrawal < 0 || (r.MaxWithdrawal > 0 && r.MaxWithdrawal < r.MinWithdrawal) {
 		e.Add("max_withdrawal", "is zero, for no limit, or at least the minimum")
+	}
+	if r.MaxMonths < 0 || r.MaxMonths > MaxRuleMonths {
+		e.Add("max_months", fmt.Sprintf("is zero, for no limit, up to %d months", MaxRuleMonths))
+	}
+	if r.MaxPayments < 0 || r.MaxPayments > MaxRulePayments {
+		e.Add("max_payments", fmt.Sprintf("is zero, for no limit, up to %d payments", MaxRulePayments))
+	}
+	if r.AnnualBaseBps < 0 || r.AnnualBaseBps > FullBaseBps {
+		e.Add("annual_base_bps", "is between 0 and 10000 basis points, where 0 and 10000 are the whole payment")
+	}
+	if r.GraceDays < 0 || r.GraceDays > MaxGraceDays {
+		e.Add("grace_days", fmt.Sprintf("is between 0 and %d days", MaxGraceDays))
+	}
+	if r.PriorPayerMonths < 0 || r.PriorPayerMonths > MaxRuleMonths {
+		e.Add("prior_payer_months", fmt.Sprintf("is zero, for off, up to %d months", MaxRuleMonths))
 	}
 	return e
 }
@@ -112,6 +156,12 @@ func (s *AffiliateService) CreatePlan(ctx context.Context, actor security.Subjec
 		plan.CookieDays = DefaultCookieDays
 	}
 	plan.MinWithdrawal, plan.MaxWithdrawal = in.MinWithdrawal, in.MaxWithdrawal
+	plan.MaxMonths, plan.MaxPayments = in.MaxMonths, in.MaxPayments
+	plan.AnnualBaseBps = in.AnnualBaseBps
+	if plan.AnnualBaseBps == 0 {
+		plan.AnnualBaseBps = FullBaseBps
+	}
+	plan.GraceDays, plan.PriorPayerMonths = in.GraceDays, in.PriorPayerMonths
 	plan.Active = Flag(activate)
 	plan.CreatedBy, plan.CreatedAt, plan.UpdatedAt = actor.ID, now, now
 
